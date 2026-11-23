@@ -1,7 +1,7 @@
 import { recordValue, type JsonObject as JSONObject } from '@agentbull/active-support'
 import type { TurnStart } from '../../lanes/actor_lane'
 import { formatZonedDateTime } from '../../prompts/zoned_time'
-import type { TextContent, UserMessage } from '../llm'
+import type { ContentPart, TextContent, UserMessage } from '../llm'
 import { backgroundAgentJobTurnContextFromTurnStart } from './background_agent_job_turn_context'
 import { scheduleTurnContextFromTurnStart } from './schedule_turn_context'
 
@@ -21,6 +21,27 @@ export function prependEnvironmentInfoLinesToUserMessage(message: UserMessage, l
   if (infoLines.length === 0) return message
 
   return upsertEnvironmentInfoPart(message, infoLines)
+}
+
+/**
+ * Inserts trusted per-turn context blocks (such as `<ambient_route>` or
+ * scheduled-reply output instructions) alongside `<agent_environment_info>`,
+ * keeping the environment-info block itself strictly key/value observations
+ * while keeping per-turn directives out of the stable system prompt.
+ */
+export function insertTrustedContextPartsAfterEnvironmentInfo(message: UserMessage, blocks: string[]): UserMessage {
+  const parts: TextContent[] = blocks
+    .map(block => block.trim())
+    .filter(block => block.length > 0)
+    .map(text => ({ type: 'text', text }))
+  if (parts.length === 0) return message
+
+  const content: ContentPart[] =
+    typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : [...message.content]
+  const envIndex = content.findIndex(block => block.type === 'text' && isAgentEnvironmentInfoBlock(block.text))
+  const insertAt = envIndex >= 0 ? envIndex + 1 : 0
+  content.splice(insertAt, 0, ...parts)
+  return { ...message, content }
 }
 
 /**

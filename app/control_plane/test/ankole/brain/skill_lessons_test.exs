@@ -267,4 +267,88 @@ defmodule Ankole.Brain.SkillLessonsTest do
     assert {:ok, _value} = AppConfigure.put_global_by_key("brain.skill_learning_enabled", false)
     assert %{status: :skipped, reason: :skill_learning_disabled} = SkillLessons.run_phase()
   end
+
+  test "review phase sends static instructions in system prompt and uses review cache key", %{
+    agent: agent
+  } do
+    allow_cache_database_access()
+    test_pid = self()
+
+    base_url =
+      start_upstream_server(fn %{path: "chat/completions", body: body} ->
+        send(test_pid, {:skill_lesson_review_request, body})
+
+        lesson_id =
+          body["messages"]
+          |> Enum.find(&(&1["role"] == "user"))
+          |> Map.fetch!("content")
+          |> then(fn content ->
+            [_, id] = Regex.run(~r/- id: ([^\s|]+)/, content)
+            id
+          end)
+
+        answer =
+          Ankole.JSON.encode!(%{
+            "reviews" => [
+              %{
+                "lesson_id" => lesson_id,
+                "verdict" => "renew",
+                "evidence_job_ids" => []
+              }
+            ]
+          })
+
+        {:json, 200, chat_completion_body(body["model"], answer)}
+      end)
+
+    {:ok, _provider} =
+      ProviderConfigs.create_provider(%{
+        provider_id: "brain-skill-lesson-review",
+        provider_kind: "openrouter",
+        base_url: base_url,
+        credential_pool: %{"entries" => [%{"label" => "Default", "api_key" => "sk-test"}]}
+      })
+
+    configure_brain_maintainer_profile!(
+      "heavy",
+      "brain-skill-lesson-review",
+      "fake-review"
+    )
+
+    {:ok, %{accepted: [lesson], rejected: []}} =
+      Library.apply_skill_lesson_adds(
+        agent.uid,
+        [
+          %{
+            "skill_name" => "xlsx",
+            "content" =>
+              "If ws.append() raises TypeError on dict rows, pass list rows in column order.",
+            "evidence_job_ids" => [1001, 1002]
+          }
+        ],
+        %{
+          evidence_job_ids: MapSet.new([1001, 1002]),
+          human_input_job_ids: MapSet.new([1001]),
+          checked_release: "stale-release"
+        }
+      )
+
+    assert %{status: :ok, agents: agents} = SkillLessons.run_phase()
+    assert %{review: %{status: :ok, docket: 1, renewed: 1}} = Map.fetch!(agents, agent.uid)
+
+    assert_receive {:skill_lesson_review_request, request}
+    assert request["prompt_cache_key"] == "brain:dreaming:skill_lesson_review"
+
+    assert [
+             %{"role" => "system", "content" => instructions},
+             %{"role" => "user", "content" => user_prompt}
+           ] = request["messages"]
+
+    assert instructions =~ "# Skill field-note review"
+    refute instructions =~ lesson.content
+    assert user_prompt =~ "## Notes due"
+    assert user_prompt =~ lesson.content
+    assert user_prompt =~ "## Recent jobs"
+    refute user_prompt =~ "# Skill field-note review"
+  end
 end

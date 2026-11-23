@@ -1,7 +1,8 @@
 ---
 name: context-dev
-description: "Get web data from Context.dev; when a site must be inventoried, crawled, or collected in a large asynchronous batch; when a site must return JSON in a supplied schema; when a company profile such as logos, colors, socials, industry, address, or stock ticker must be resolved from a domain, company name, work email, ticker, card descriptor, or one page URL; or when a page must be watched on a schedule for changes."
+description: "Get web data from Context.dev: inventory/crawl sites or run large async batches; extract JSON in a supplied schema; resolve company profiles (logos, colors, socials, industry, address, ticker) from domain, name, work email, ticker, card descriptor, or URL; or monitor pages on a schedule."
 default_enabled: false
+ankole-runtime: any
 category: data
 tags:
   - web-data
@@ -62,70 +63,47 @@ Ankole generates `MCPORTER_CONFIG` for each Main turn, Background Agent Job exec
 
 ### Web reading
 
-- `web-search`: Search the live web. 1 credit for each result, and `numResults` starts at 10, so one search costs at least 10 credits. `markdownOptions.enabled: true` also scrapes each hit in the same call.
-- `web-scrape-markdown`: Turn one known URL into clean Markdown. 1 credit, or 2 with `actions`. This is the default page reader.
-- `web-scrape-html`: Return rendered raw HTML. 1 credit, or 2 with `actions`. Use it only when DOM structure, attributes, or scripts are the answer.
-- `web-scrape-images`: List the image assets of one page. 1 credit, 2 with `actions`, 5 when any `enrichment` flag is set.
-- `web-scrape-sitemap`: Discover the URLs of a domain. 1 credit. It returns URLs only, never page bodies, so use it before you decide what to read.
-- `web-crawl`: Follow internal links from one URL and return Markdown for each page in one synchronous call. 1 credit for each page, `maxPages` at most 500. Set `maxPages` to what you will read.
-- `web-extract`: Crawl the relevant pages and return data shaped by a JSON Schema. 10 credits, `maxPages` at most 50.
-- `parse-document`: Convert base64 file bytes to Markdown. 1 credit, 5 when OCR adds text, and the decoded file must be 25 MiB or smaller. Ankole reads PDF, image, DOCX, PPTX, and XLSX files locally through its own Skills, so reach for this tool only for a format they do not read, such as `.doc`, `.rtf`, or `.srt`.
+- `web-search`: Search the live web (1 credit/result, `numResults` starts at 10; `markdownOptions.enabled: true` scrapes each hit).
+- `web-scrape-markdown`: Turn one known URL into clean Markdown (1 credit, 2 with `actions`). Default page reader.
+- `web-scrape-html`: Return rendered raw HTML (1 credit, 2 with `actions`) when DOM structure/scripts are needed.
+- `web-scrape-images`: List page image assets (1 credit, 2 with `actions`, 5 with `enrichment`).
+- `web-scrape-sitemap`: Discover URLs of a domain (1 credit; returns URLs only).
+- `web-crawl`: Follow internal links synchronously (1 credit/page, `maxPages` <= 500). Set `maxPages` to what you will read.
+- `web-extract`: Crawl relevant pages and return data shaped by a JSON Schema (10 credits, `maxPages` <= 50).
+- `parse-document`: Convert base64 file bytes <= 25 MiB to Markdown (1 credit, 5 with OCR). Use only for formats Ankole's local Skills do not read (e.g., `.doc`, `.rtf`, `.srt`).
 
-Read [references/web-reading.md](references/web-reading.md) before you compose any of these calls.
+Read [references/web-reading.md](references/web-reading.md) before composing any of these calls.
 
 ### Brand intelligence
 
-- `brand-retrieve-unified`: Return a structured company profile. 10 credits. All arguments go inside one `body` object whose `type` selects the lookup.
-- `get-brand`: Return the same profile for a bare domain as a visual card. 10 credits. Prefer `brand-retrieve-unified` when you need the fields.
+- `brand-retrieve-unified`: Structured company profile (10 credits); all arguments go in one `body` object whose `type` selects the lookup.
+- `get-brand`: Same profile for a bare domain as a visual card (10 credits). Prefer `brand-retrieve-unified` for structured fields.
 
 ### Design, visual, and classification
 
-- `web-styleguide`: Return colors, typography, spacing, shadows, and paste-ready component CSS. 10 credits.
-- `web-fonts`: Return the font families of a site with fallbacks and usage share. 5 credits.
-- `web-screenshot`: Return a hosted PNG URL for a rendered page. 5 credits.
-- `web-naics`: Return 2022 NAICS codes for a domain or company name. 10 credits.
-- `web-sic`: Return SIC codes against `original_sic` or `latest_sec`. 10 credits.
+- `web-styleguide`: Colors, typography, spacing, shadows, and component CSS (10 credits).
+- `web-fonts`: Font families of a site with fallbacks and usage share (5 credits).
+- `web-screenshot`: Hosted PNG URL for a rendered page (5 credits).
+- `web-naics`: 2022 NAICS codes for a domain or company name (10 credits).
+- `web-sic`: SIC codes against `original_sic` or `latest_sec` (10 credits).
 
-Read [references/brand-and-design.md](references/brand-and-design.md) for the `body` union, the returned brand object, and the `domain`/`directUrl` rule.
+Read [references/brand-and-design.md](references/brand-and-design.md) for the `body` union, returned brand fields, and the `domain`/`directUrl` rule.
 
-### Monitors
+### Monitors & Batches
 
-`list-monitors`, `create-monitor`, `get-monitor`, `update-monitor`, `delete-monitor`, `run-monitor-now`, `list-monitor-runs`, `get-monitor-run`, `list-monitor-changes`, `list-changes`, `get-change`, `list-account-runs`, `list-monitor-credit-usage`.
-
-A monitor is a recurring check that lives in the Context account and spends credits at each run. Use it for change detection over time, not for one reading.
-
-### Batches
-
-`submit-batch`, `list-batches`, `get-batch`, `get-batch-results`, `cancel-batch`, `delete-batch`.
-
-A batch is an asynchronous job for work that is too large for `web-scrape-markdown` or `web-crawl`. `submit-batch` returns an ID, not pages.
+- **Monitors** (`list-monitors`, `create-monitor`, `get-monitor`, `update-monitor`, `delete-monitor`, `run-monitor-now`, `list-monitor-runs`, `get-monitor-run`, `list-monitor-changes`, `list-changes`, `get-change`, `list-account-runs`, `list-monitor-credit-usage`): recurring checks that spend credits per run.
+- **Batches** (`submit-batch`, `list-batches`, `get-batch`, `get-batch-results`, `cancel-batch`, `delete-batch`): async jobs for up to 25,000 URLs or large crawls.
 
 Read [references/monitors-and-batches.md](references/monitors-and-batches.md) for both lifecycles.
 
 ## Account Writes
 
-`create-monitor`, `update-monitor`, `delete-monitor`, `run-monitor-now`, `submit-batch`, `cancel-batch`, and `delete-batch` change durable state in the operator's Context account, and a monitor keeps spending credits until somebody removes it. Call them for the request the user made, and report the monitor or batch ID that the call returned so the user can find it again.
+`create-monitor`, `update-monitor`, `delete-monitor`, `run-monitor-now`, `submit-batch`, `cancel-batch`, and `delete-batch` change durable state in the operator's Context account, and a monitor keeps spending credits until removed. Call them for the user's request and report the returned monitor or batch ID.
 
-Treat a submission as non-idempotent. After a timeout or an unclear error, list monitors or batches and read the current state before you retry. `submit-batch` accepts an `Idempotency-Key`; reuse the same key when you retry the same submission.
+Treat submissions as non-idempotent: list monitors/batches after a timeout or unclear error before retrying, and reuse the same `Idempotency-Key` when retrying `submit-batch`.
 
-## Reading Rules
+## Reading Rules and Error Handling
 
-1. Pass a bare domain, such as `stripe.com`, where the tool asks for `domain`. Pass a full `http` or `https` URL where the tool asks for `url` or `directUrl`.
-2. A cached answer returns in under a second. A cold answer takes about 7 seconds at p50 and can reach a minute, so raise `timeoutMS` toward its 300000 ms maximum for a first look at a slow site, and keep the mcporter `--timeout` above it.
-3. `[N entries omitted]` or `...[truncated]` means the business result is incomplete. Do not analyze it and do not advance a cursor. Ask again with fewer pages, fewer results, or a narrower range.
-4. Follow `next_cursor` while the response says more results exist. A page can close early to stay under its size limit, so trust the cursor instead of counting records.
-5. Any field can be absent. Check the fields you need before you build an answer on them.
-6. Report the URL or domain you read, the tool you called, and any page that failed or was skipped.
+Pass a bare `domain` where requested and a full `http`/`https` URL for `url`/`directUrl`. Raise `timeoutMS` toward `300000` (and keep `--timeout` higher) for slow cold pages, follow `next_cursor` instead of counting records, never analyze `[N entries omitted]` or `...[truncated]` responses, check for absent fields, and report the target, tool called, and any skipped/failed pages.
 
-## Errors
-
-| Status | Meaning | Next step |
-| --- | --- | --- |
-| 400 | Malformed input, `WEBSITE_ACCESS_ERROR` for an unreachable or blocked site, or `NOT_FOUND` for no brand match | Fix the input, or report the site as unreadable. `NOT_FOUND` is free |
-| 401 | `CONTEXT_DEV_API_KEY` is missing or wrong | Report the variable name and ask the operator to set it in Console |
-| 403 | `FORBIDDEN` for a paid-plan feature, or `USAGE_EXCEEDED` | Report the plan or quota limit. Browser `actions` need a paid plan |
-| 408 | Cold answer or `timeoutMS` exceeded | Raise `timeoutMS`, or narrow the request |
-| 422 | Free or disposable address on an email lookup | Skip enrichment for that address |
-| 429 | Rate limit | Wait, then retry with growing delays |
-
-A tool name that the server rejects means the catalog changed. Inspect the selected tool again and use its current replacement.
+Read [references/reading-and-errors.md](references/reading-and-errors.md) for the full reading rules and HTTP error handling (`400`, `401`, `403`, `408`, `422`, `429`).

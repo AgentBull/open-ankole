@@ -66,6 +66,7 @@ jobs:
       - run: bun run --filter @ankole/webapps test
       - run: bun run --filter @ankole/browser test
       - run: bun run --filter @agentbull/devkit test
+      - run: bun test app/agent_computer/test/prompt-surface.test.ts
       - run: bun run --filter @ankole/webapps build
       - run: bun run --filter @ankole/website build
       - name: Install Helm
@@ -154,6 +155,8 @@ jobs:
       - run: mix local.hex --force && mix local.rebar --force && mix deps.get
         working-directory: app/control_plane
       - run: bun run --filter @ankole/control-plane lint
+      - run: mix ankole.skills.lint
+        working-directory: app/control_plane
       - run: mix ankole.openapi.check
         working-directory: app/control_plane
       - name: Verify generated browser SDKs

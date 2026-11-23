@@ -76,7 +76,18 @@ defmodule Ankole.Brain.PatternsTest do
     assert updated.body =~ "shared review"
     assert evidence(page.slug) == Enum.drop(context.slugs, 1)
     assert Repo.aggregate(ObjectVersion, :count) == 1
-    assert List.last(requests(context.state))["messages"] |> inspect() =~ page.slug
+    last_request = List.last(requests(context.state))
+    assert last_request["prompt_cache_key"] == "brain:dreaming:patterns"
+
+    assert [
+             %{"role" => "system", "content" => instructions},
+             %{"role" => "user", "content" => user_prompt}
+           ] = last_request["messages"]
+
+    assert instructions =~ "Find recurring patterns across recent organizational memory pages."
+    refute instructions =~ page.slug
+    assert user_prompt =~ page.slug
+    refute user_prompt =~ "Find recurring patterns across recent organizational memory pages."
 
     assert {:ok, visible} = Recall.recall(context.owner.uid, %{query: "renewal approval"})
     assert Enum.any?(visible.chunks, &(&1.object_slug == page.slug))

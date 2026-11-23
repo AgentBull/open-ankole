@@ -143,6 +143,32 @@ name, description, and tags as a small discovery record; `skill_view` remains
 the only loader for its full body and resources. Agent-installed Skills do not
 use this discovery mode.
 
+### Progressive Disclosure and Linting for Shipped Skills
+
+Shipped runtime Skills under `app/library` (`app/library/skills/*/SKILL.md`
+and `app/library/agent-plugins/*/skills/*/SKILL.md`; developer skills under
+`.agents/skills` are excluded) follow three progressive-disclosure tiers enforced
+by `Ankole.AIAgent.Library.SkillLinter` (`mix ankole.skills.lint` in
+`app/control_plane`, gated in CI `control-plane-checks`):
+
+- **L0 (catalog index):** `description` in YAML frontmatter must be a
+  single-line string of 12 characters or more and at most 75 `o200k_base`
+  tokens (measured with `Ankole.Kernel.estimate_o200k_base_tokens/1`), preserving
+  trigger conditions and exclusions without bloating every system prompt.
+- **L1 (`SKILL.md`):** Each `SKILL.md` file must be valid UTF-8, at most
+  8,192 bytes (8 KiB) and 250 lines, and declare `ankole-runtime` with one of
+  `any`, `main`, or `background_job`.
+- **L2 (on-demand references):** Detailed command references, step-by-step
+  recipes, QA checklists, and templates live in `references/*.md` (and sibling
+  subdirectories) inside that Skill's own directory. Every relative Markdown link
+  in `SKILL.md` and `references/**/*.md` must resolve to a real non-symlink file
+  inside that Skill's directory (`..` traversal and broken links fail;
+  `http://`, `https://`, `mailto:`, and `#anchors` are excluded).
+
+`SkillLinter` also rejects bidirectional control characters (`U+200E`, `U+200F`,
+`U+202A`–`U+202E`, `U+2066`–`U+2069`), zero-width characters (`U+200B`–`U+200D`,
+`U+FEFF`), and potential secret literals in `SKILL.md` and `references/**/*.md`.
+
 ### What a Job Saves and Loads
 
 The Job stores one optional `workspace_template_id`. At first execution
@@ -306,4 +332,8 @@ adapter and a related Agent Plugin can have different enabled states.
 - Require a restart after setup for Control Plane Plugin activation changes.
 - Keep new Control Plane Plugins inactive on completed installations until an
   operator enables them.
+- Keep shipped runtime Skills under `app/library` compliant with `mix ankole.skills.lint`
+  (single-line `description <= 75` `o200k_base` tokens, `SKILL.md <= 8,192` bytes
+  and `<= 250` lines, explicit `ankole-runtime`, and relative links confined to the
+  Skill directory).
 - Keep durable state with its owning subsystem.

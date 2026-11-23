@@ -47,9 +47,9 @@ export type AmbientRecognizerUserPromptInput = {
   timezone: string
 }
 
-/** Builds the stable identity and routing policy for the recognizer model. */
+/** Builds the stable routing policy and agent identity for the recognizer model. */
 export function buildAmbientRecognizerSystemPrompt(input: AmbientRecognizerSystemPromptInput): string {
-  return [aboutSection(input), routingPolicySection()].filter(Boolean).join('\n\n')
+  return [routingPolicySection(), aboutSection(input)].filter(Boolean).join('\n\n')
 }
 
 /** Builds the current room facts and bounded observation window. */
@@ -59,7 +59,8 @@ export function buildAmbientRecognizerUserPrompt(input: AmbientRecognizerUserPro
     standingOrdersSection(input.standingOrders),
     workCandidatesSection(input.workCandidates),
     backdropSection(input.backdrop),
-    newMessagesSection(input.newMessages)
+    newMessagesSection(input.newMessages),
+    currentTimeSection(input.currentTime)
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -124,7 +125,6 @@ function missionSection(mission: string | undefined): string {
 function runtimeContextSection(input: AmbientRecognizerUserPromptInput): string {
   return [
     '<runtime_context>',
-    `current_time: ${input.currentTime}`,
     `timezone: ${input.timezone}`,
     `platform: ${signalAdapterDisplayName(input.adapter) ?? 'messaging platform'}`,
     `group_name: ${input.groupName ?? 'unknown group'}`,
@@ -170,4 +170,8 @@ function newMessagesSection(lines: string[]): string {
     'New Messages (not yet judged; classify only these):',
     lines.length > 0 ? lines.join('\n') : '- No visible group messages were provided.'
   ].join('\n')
+}
+
+function currentTimeSection(currentTime: string): string {
+  return `current_time: ${currentTime}`
 }

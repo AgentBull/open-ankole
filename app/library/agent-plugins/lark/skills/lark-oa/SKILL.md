@@ -2,6 +2,7 @@
 name: lark-oa
 description: "Operate bot-useful Lark work-management APIs as this digital employee's application: tasks, OKRs, and attendance. Use only when the installed endpoint explicitly supports bot identity."
 default_enabled: true
+ankole-runtime: any
 category: productivity
 tags: [lark, task, okr, attendance, oa]
 metadata:

@@ -2,6 +2,7 @@
 name: design-md
 description: "Use for visual artifacts or beautification when internal VIS may apply. Required when the user requests internal VIS; skip on opt-out or another specified style instead; optional when no style source is given."
 default_enabled: true
+ankole-runtime: any
 category: creative
 tags: [design, vis, visual-identity, artifacts]
 metadata:

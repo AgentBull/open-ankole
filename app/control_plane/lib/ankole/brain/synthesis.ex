@@ -29,6 +29,12 @@ defmodule Ankole.Brain.Synthesis do
 
   @type disclosure :: Ankole.Brain.Access.disclosure()
 
+  @synthesis_instructions """
+  Answer one question from organizational memory. Reason only from the
+  evidence; say what is missing instead of inventing it. Return one JSON
+  object: {"title":"...","body":"<markdown analysis>"}
+  """
+
   @doc """
   Synthesizes one analysis page for a question from recalled evidence.
 
@@ -62,10 +68,6 @@ defmodule Ankole.Brain.Synthesis do
         end)
 
       prompt = """
-      Answer one question from organizational memory. Reason only from the
-      evidence; say what is missing instead of inventing it. Return one JSON
-      object: {"title":"...","body":"<markdown analysis>"}
-
       Question: #{question}
 
       Evidence claims:
@@ -75,7 +77,12 @@ defmodule Ankole.Brain.Synthesis do
       #{evidence_chunks}
       """
 
-      with {:ok, output} <- ModelCalls.complete_json(model, prompt, caller: "brain.synthesis"),
+      with {:ok, output} <-
+             ModelCalls.complete_json(model, prompt,
+               caller: "brain.synthesis",
+               instructions: String.trim(@synthesis_instructions),
+               prompt_cache_key: "brain:synthesis"
+             ),
            title when is_binary(title) <- output["title"],
            body when is_binary(body) <- output["body"] do
         # The scope enters the slug so one question asked inside two

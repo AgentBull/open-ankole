@@ -46,21 +46,28 @@ These belong to the actor turn, not to any individual model response, so they ri
 
 ## The worker-side assembly
 
-`system_prompt.ts` on the worker builds the final prompt. Its moduledoc states the design: "Slow-changing instructions lead; conversation-scoped runtime and skill context form the suffix." The blocks, in order:
+`system_prompt.ts` on the worker builds the final system prompt. Its moduledoc states the design: "Slow-changing instructions lead; conversation-scoped runtime and skill context form the suffix." The blocks, in order:
 
-1. **Core instructions** — the agent's base behavior contract, assembled from the turn's context.
-2. **Durable Agent documents** — `SOUL`, `MISSION`, and `DESIGN`, rendered from the broker's response.
-3. **Skills** — the enabled skill descriptions, telling the model what it can reach for.
-4. **Channel and runtime context** — the conversation origin channel, the workspace paths, the available tool names.
+1. **Identity and durable Agent documents** — the agent identity line, `SOUL.md`, and `MISSION.md` (when non-empty), rendered from the broker's response. (`DESIGN.md` and `ConfidentialityPolicy.md` are materialized as read-only files in Agent Home rather than embedded in the system prompt.)
+2. **Completion and capability policy contracts** — `<completion_contract>` followed by capability-gated policy blocks (`<background_agent_job_policy>`, `<workflow_policy>`, `<long_term_memory>`, `<agent_environment_info_policy>`, and `<tools>`), driven only by stable turn capabilities.
+3. **Skills** — the enabled skill catalog under `## Skills` (omitting `brain-recall-only: true` entries and, when Background Agent Jobs are unavailable, `ankole-runtime: background_job` entries), telling the model which Skills it can load on demand with `skill_view`.
+4. **Session runtime context** — `<runtime_context>` carrying the agent UID, display name, workspace and `user-files` paths, timezone, optional role, conversation start time, and conversation origin channel.
 
-The worker re-renders the full prompt every turn from current PostgreSQL-backed context — it does not trust a cached version. AIGateway retains prior request instructions for audit, but the turn renders the current state.
+The worker re-renders the prompt every turn from current PostgreSQL-backed context — it does not trust a cached version — while keeping the system prompt prefix byte-identical across main, ambient (`FOREGROUND_REPLY`, `NEW_WORK`), and scheduled turns when identity and capabilities match. Local `tools` and `hostedTools` declarations likewise stay identical across those turns; Worker `beforeToolCall` and AIGateway `HostedTools.Brain` enforce ambient route boundaries at execution time instead of mutating the system prompt or tool schema prefix. AIGateway retains prior request instructions for audit, while each turn renders the current state.
 
 ## What is NOT in the system prompt
 
 - **Transcript history** — owned by AIGateway's stateful Responses; the system prompt does not repeat it.
-- **Turn-local observations** — the signal, the incoming message, the user's current input. These stay in the current user message, not in the system prompt.
+- **Turn-local observations and directives** — the signal, `<agent_environment_info>`, `<ambient_route>` route directives, scheduled-turn reply instructions, and the user's current input. `buildTextTurnUserPrompt` places `<ambient_route>` and scheduled-turn reminders in the current turn's user message alongside `<agent_environment_info>`, keeping them out of the system prompt.
 
-This separation keeps the system prompt stable (it changes when persona or skills change, not when the conversation grows) and keeps the per-turn payload small.
+This separation keeps the system prompt and tool declarations prefix-cacheable (they change when persona, capabilities, or skills change, not per message or turn route) and keeps the per-turn payload small.
+
+## Ambient recognizer prompt layout
+
+In `ambient_prompt.ts`, the ambient intent router follows the same prefix-stability split:
+
+- `buildAmbientRecognizerSystemPrompt` places the static routing policy (`routingPolicySection`) before the agent-specific `<about>` block (`display_name`, `<agent_soul>`, `<mission>`).
+- `buildAmbientRecognizerUserPrompt` puts stable room metadata (`<runtime_context>` with `timezone`, `platform`, and `group_name`), standing orders, active work candidates, earlier context, and new messages ahead of `current_time`, placing `current_time` at the very end of the user prompt so the changing timestamp never invalidates the prefix ahead of it.
 
 ## What this guide is not
 

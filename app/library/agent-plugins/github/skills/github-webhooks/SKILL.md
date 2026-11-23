@@ -2,6 +2,7 @@
 name: github-webhooks
 description: "Watch GitHub repository events over time with a webhook delegation that wakes the current Agent session."
 default_enabled: false
+ankole-runtime: any
 category: github
 tags: [GitHub, Webhooks, Delegation, Reconciliation]
 version: 1.3.0

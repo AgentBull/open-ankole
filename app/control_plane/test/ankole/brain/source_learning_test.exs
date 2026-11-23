@@ -35,7 +35,8 @@ defmodule Ankole.Brain.SourceLearningTest do
     base_url =
       start_upstream_server(fn
         %{path: "chat/completions", body: body} ->
-          prompt = body["messages"] |> List.first() |> Map.fetch!("content")
+          prompt = user_message_content(body["messages"])
+          send(test_pid, {:source_extraction_request, body})
           send(test_pid, {:source_extraction_prompt, prompt})
           output = Agent.get(items_holder, & &1)
 
@@ -194,7 +195,20 @@ defmodule Ankole.Brain.SourceLearningTest do
 
     prompts =
       for _index <- 1..9 do
+        assert_receive {:source_extraction_request, request}
+        assert request["prompt_cache_key"] == "brain:source_learning"
+
+        assert [
+                 %{"role" => "system", "content" => instructions},
+                 %{"role" => "user", "content" => user_prompt}
+               ] = request["messages"]
+
+        assert instructions =~ "Extract durable factual claims from this source excerpt."
+        refute instructions =~ "valid_from"
+        refute user_prompt =~ "Extract durable factual claims from this source excerpt."
+
         assert_receive {:source_extraction_prompt, prompt}
+        assert prompt == user_prompt
         prompt
       end
 
@@ -426,7 +440,7 @@ defmodule Ankole.Brain.SourceLearningTest do
     test_pid = self()
 
     configure_extraction_provider!("brain-source-revision-fence", fn body ->
-      prompt = body["messages"] |> List.first() |> Map.fetch!("content")
+      prompt = user_message_content(body["messages"])
 
       claim =
         if String.contains?(prompt, "REVISION_OLD") do
@@ -464,6 +478,12 @@ defmodule Ankole.Brain.SourceLearningTest do
     assert %Object{body: body} = Repo.get_by(Object, title: "Field Notes")
     assert body =~ "REVISION_NEW"
     refute body =~ "REVISION_OLD"
+  end
+
+  defp user_message_content(messages) do
+    messages
+    |> Enum.find(&(&1["role"] == "user"))
+    |> Map.fetch!("content")
   end
 
   defp configure_extraction_provider!(provider_id, handler) do

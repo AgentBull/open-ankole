@@ -543,6 +543,18 @@ in both cases. AIGateway model cards disable Responses Lite because the pinned
 Codex omits configured hosted search from that private carrier. Standard
 Responses sends the native `web_search` declaration.
 
+`Ankole.AIGateway.CodexModels` serves the `/models` cards using
+`app/control_plane/priv/codex/base_instructions.md` plus the 10,000-token
+`@tool_output_limit_tokens` output-limit guidance suffix in both
+`base_instructions` and `model_messages.instructions_template`. OpenAnkole owns
+`priv/codex/base_instructions.md` as a concise headless Background Agent Job
+prompt — covering autonomous execution with no live terminal user, `AGENTS.md`
+precedence, minimal scoped changes, `unified_exec`, freeform `apply_patch`,
+`rg`, concise `update_plan` tracking, proactive self-validation, and a factual
+final verification report without interactive CLI/TUI preambles or internal
+architecture names — and keeps that file separate when updating pinned Codex
+CLI versions.
+
 For AIGateway, the Agent Codex Home selects the `ankole_aigateway` provider.
 Its configured name is `OpenAI`, which tells the pinned Codex runtime that this
 hop can carry remote compaction. The provider ID does not change. Every Job uses
@@ -607,9 +619,12 @@ when a Job initializes its Workspace.
 
 ## Prepare Skills for Each Run
 
-`SKILL.md` can declare one optional `ankole-runtime` value:
+`SKILL.md` can declare `ankole-runtime` (`any`, `main`, or `background_job`).
+Shipped runtime Skills under `app/library` are required by `mix ankole.skills.lint`
+to declare one of those three values; third-party or Agent-installed Skills with
+an absent `ankole-runtime` value default to available on both surfaces:
 
-- An absent value or `any` permits the main Agent and Background Agent Jobs.
+- An absent value (when permitted) or `any` permits the main Agent and Background Agent Jobs.
 - `main` permits only the main Agent. Job preparation leaves it out of the
   Job's Skill index and MCP configuration.
 - `background_job` permits only Jobs. The main Agent receives Job routing

@@ -1,22 +1,23 @@
 import type { TurnStart } from '../../lanes/actor_lane'
 import { runAgentLoop } from '../agent-loop'
-import { buildAgentSystemPrompt } from '../../prompts/system_prompt'
 import type { SkillFileRoots } from '../../tools/library/skill-tools'
 import { loadEnabledSkillMCPServers } from '../../tools/mcp'
-import { assistantText, BRAIN_OPERATIONS, userMessage, type HostedTool, type UserMessage } from '../llm'
+import { assistantText, userMessage, type UserMessage } from '../llm'
 import { actorEventUserContent } from './actor_event_content'
 import { channelContextModelMessages } from './channel_context'
 import { acquireTurnAIGatewayAccess } from './turn_ai_gateway_access'
 import { workerTurnTrace } from '../../observability/turn-tracing'
 import {
-  actorEventEnvironmentInfoLines,
-  prependEnvironmentInfoLinesToUserMessage,
-  turnRequestEnvironmentInfoLines
-} from './message_context'
+  buildTextTurnSystemPrompt,
+  buildTextTurnUserPrompt,
+  hostedBrainOperationNames,
+  textTurnHostedTools,
+  textTurnStatefulContext
+} from './text_turn_prompt'
 import { steeringMessagesWithAcknowledgement } from './turn_control'
 import { createTurnActivity } from './turn_activity'
 import { resolveAgentConversationContext } from './turn_context'
-import { agentRuntimePolicyFromTurnStart, statefulTruncationFromActorEventPayload } from './turn_runtime_policy'
+import { agentRuntimePolicyFromTurnStart } from './turn_runtime_policy'
 import { resolveRenderedFetchRuntimeConfig } from './rendered_fetch_runtime_config'
 import { backgroundAgentJobTurnContextFromTurnStart } from './background_agent_job_turn_context'
 import { scheduleTurnContextFromTurnStart } from './schedule_turn_context'
@@ -110,7 +111,7 @@ export async function runTextTurnLoop(turnStart: TurnStart, opts: TextTurnLoopOp
       'execution materials'
     )
     if (!webTools) throw new Error('worker execution materials did not prepare web tools')
-    const resolvedTools = createTextTurnTools({
+    const tools = createTextTurnTools({
       turnStart,
       agentsRoot: opts.agentsRoot,
       agentHome: opts.agentHome,
@@ -125,13 +126,11 @@ export async function runTextTurnLoop(turnStart: TurnStart, opts: TextTurnLoopOp
       runtimeEnv: executionMaterials.runtimeEnv,
       webTools
     })
-    const tools = toolsForAmbientRoute(resolvedTools, opts.ambientRoute)
 
-    // A main Turn takes the whole Brain catalog and the memory injection; the
-    // control plane declares `brain` only while `brain.enabled` is true.
-    const hostedTools = hostedToolsForAmbientRoute(turnStart.hosted_tools ?? [], opts.ambientRoute).map(
-      (tool): HostedTool => (tool.type === 'brain' ? { type: 'brain', inject: true } : tool)
-    )
+    // Every turn keeps the full tool catalog and Brain declaration so the
+    // instruction/tool prefix stays cache-stable across routes; runtime guards
+    // in `agent-loop.ts` and AIGateway enforce ambient route boundaries.
+    const hostedTools = textTurnHostedTools(turnStart)
 
     opts.logger?.info('worker.turn_tools_resolved', 'worker turn tools resolved', {
       actor_event_id: turnStart.turn.actor_event_id,
@@ -141,24 +140,18 @@ export async function runTextTurnLoop(turnStart: TurnStart, opts: TextTurnLoopOp
       hosted_tool_types: hostedTools.map(tool => tool.type)
     })
 
-    const promptOptions = {
+    const systemPrompt = buildTextTurnSystemPrompt({
       userFilesRoot: opts.userFilesRoot,
       workspaceRoot: opts.workspaceRoot,
-      turnStart: { ...turnStart, hosted_tools: hostedTools },
+      turnStart,
       agentConversationContext,
-      availableToolNames: [...tools.map(tool => tool.name), ...hostedBrainOperationNames(hostedTools)],
+      tools,
+      hostedTools
+    })
+    const prompt = buildTextTurnUserPrompt(turnStart, userPrompt, {
+      timezone: conversationTimezone,
       ambientRoute: opts.ambientRoute
-    }
-    const systemPrompt = [
-      buildAgentSystemPrompt(promptOptions),
-      ...(scheduleContext ? [scheduledReplyReminder(scheduleContext.silentSuccessAllowed)] : [])
-    ].join('\n\n')
-    const prompt = prependEnvironmentInfoLinesToUserMessage(userPrompt, [
-      ...actorEventEnvironmentInfoLines(actorEvent.payload_json, {
-        timezone: conversationTimezone
-      }),
-      ...turnRequestEnvironmentInfoLines(turnStart)
-    ])
+    })
 
     const latest = await runAgentLoop({
       model,
@@ -181,13 +174,10 @@ export async function runTextTurnLoop(turnStart: TurnStart, opts: TextTurnLoopOp
             nudgeEmptyAfterTools: false
           }
         : {}),
-      stateful: {
-        actorEventID: actorEvent.actor_event_id,
-        conversationID: aiGatewayConversationID,
-        truncation: statefulTruncationFromActorEventPayload(actorEvent.payload_json)
-      },
+      stateful: textTurnStatefulContext(turnStart, aiGatewayConversationID, opts.ambientRoute),
       tools,
       hostedTools,
+      ...(opts.ambientRoute ? { ambientRoute: opts.ambientRoute } : {}),
       abortSignal: turnActivity.signal,
       onActivity: turnActivity.touch,
       logger: opts.logger,
@@ -214,38 +204,12 @@ export async function runTextTurnLoop(turnStart: TurnStart, opts: TextTurnLoopOp
   }
 }
 
-export function toolsForAmbientRoute<T extends { isReadOnly?: boolean }>(
-  tools: T[],
-  route: TextTurnLoopOptions['ambientRoute']
-): T[] {
-  if (!route) return tools
-  if (route.action === 'NEW_WORK' && route.authority === 'NONE') return []
-  if (route.action !== 'FOREGROUND_REPLY') return tools
-
-  return tools.filter(tool => tool.isReadOnly === true)
-}
-
-export function hostedToolsForAmbientRoute<T extends { type: string }>(
-  tools: T[],
-  route: TextTurnLoopOptions['ambientRoute']
-): T[] {
-  if (!route) return tools
-  if (route.action === 'NEW_WORK' && route.authority === 'NONE') return []
-  if (route.action !== 'FOREGROUND_REPLY') return tools
-
-  // A foreground reply keeps read-and-write memory: it speaks for the Agent in
-  // the room, and a confirmation-only turn above has already dropped it.
-  return tools.filter(tool => tool.type === 'web_search' || tool.type === 'brain')
-}
-
-/**
- * The model-facing names of the hosted Brain operations, so prompt guidance
- * about memory follows what AIGateway actually declares this turn.
- */
-export function hostedBrainOperationNames(hostedTools: HostedTool[]): string[] {
-  const brain = hostedTools.find(tool => tool.type === 'brain')
-  if (!brain || brain.type !== 'brain') return []
-  return [...(brain.operations ?? BRAIN_OPERATIONS)]
+export {
+  buildTextTurnSystemPrompt,
+  buildTextTurnUserPrompt,
+  hostedBrainOperationNames,
+  textTurnHostedTools,
+  textTurnStatefulContext
 }
 
 function logAIGatewayRoute(

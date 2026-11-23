@@ -297,6 +297,91 @@ defmodule Ankole.AIGateway.HostedTools.BrainTest do
       request = StreamLoop.disable_budgeted_effects(loop, loop.provider_request)
       assert ToolSearch.list_tools(request) == []
     end
+
+    test "rejects brain operations without execution when NEW_WORK authority is NONE", context do
+      {loop, brain} =
+        loop!(context.agent.uid, %{"type" => "brain"}, %{
+          "ambient_route_action" => "NEW_WORK",
+          "ambient_route_authority" => "NONE"
+        })
+
+      assert Enum.map(loop.downstream_tools, & &1["name"]) == Tools.operations()
+      refute brain.route_allowed?
+
+      terminal = %{
+        "id" => "resp_p",
+        "status" => "completed",
+        "output" => [
+          call_item(
+            "remember",
+            ~s({"object_slug":"concepts/wire-format","claim":"unauthorized_new_work_claim","kind":"fact","provenance":"test"})
+          )
+        ]
+      }
+
+      assert {:local, [job], loop_context, loop} =
+               StreamLoop.intercept_terminal(loop, "response.completed", terminal)
+
+      assert %{operation: "remember", preflight_outcome: %{error_code: "brain_route_not_allowed"}} =
+               job
+
+      outcomes =
+        ProgramExecution.run_jobs([job], fn _code, _bindings, _memo -> {:error, :unused} end)
+
+      assert {:round, _continuation, [output_item], _loop} =
+               StreamLoop.complete_local_effect(loop, loop_context, outcomes)
+
+      assert output_item["status"] == "failed"
+      assert output_item["output"]["error"] == "brain_route_not_allowed"
+
+      assert {:ok, %{"claims" => claims}} =
+               Tools.execute("recall", %{"query" => "unauthorized_new_work_claim"}, brain.context)
+
+      assert claims == []
+    end
+
+    test "keeps read and write operations enabled on FOREGROUND_REPLY", context do
+      {loop, brain} =
+        loop!(context.agent.uid, %{"type" => "brain"}, %{
+          "ambient_route_action" => "FOREGROUND_REPLY",
+          "ambient_route_authority" => "NONE"
+        })
+
+      assert brain.route_allowed?
+
+      terminal = %{
+        "id" => "resp_p",
+        "status" => "completed",
+        "output" => [
+          call_item(
+            "remember",
+            ~s({"object_slug":"concepts/wire-format","claim":"foreground_reply_written_fact","kind":"fact","provenance":"test"})
+          )
+        ]
+      }
+
+      assert {:local, [job], loop_context, loop} =
+               StreamLoop.intercept_terminal(loop, "response.completed", terminal)
+
+      refute Map.has_key?(job, :preflight_outcome)
+
+      outcomes =
+        ProgramExecution.run_jobs([job], fn _code, _bindings, _memo -> {:error, :unused} end)
+
+      assert {:round, _continuation, [output_item], _loop} =
+               StreamLoop.complete_local_effect(loop, loop_context, outcomes)
+
+      assert output_item["status"] == "completed"
+
+      assert {:ok, %{"claims" => [claim | _rest]}} =
+               Tools.execute(
+                 "recall",
+                 %{"query" => "foreground_reply_written_fact"},
+                 brain.context
+               )
+
+      assert claim["claim"] == "foreground_reply_written_fact"
+    end
   end
 
   describe "injection" do
@@ -442,6 +527,52 @@ defmodule Ankole.AIGateway.HostedTools.BrainTest do
       assert pack_text(pack) =~ "entity: concepts/wire-format"
       assert context.object.slug == "concepts/wire-format"
     end
+
+    test "skips injection without consuming the context pack slot when NEW_WORK authority is NONE",
+         context do
+      conversation = insert_conversation!(context.agent.uid)
+      input = [user_message("Tell me about the Wire Format")]
+
+      denied_request =
+        injecting_request(%{
+          "ambient_route_action" => "NEW_WORK",
+          "ambient_route_authority" => "NONE"
+        })
+
+      assert {^input, %{}} =
+               Brain.inject_stateful(context.agent.uid, denied_request, conversation, input)
+
+      reloaded = Repo.reload!(conversation)
+      refute Map.has_key?(reloaded.metadata || %{}, "brain_context_pack_at")
+
+      foreground_request =
+        injecting_request(%{
+          "ambient_route_action" => "FOREGROUND_REPLY",
+          "ambient_route_authority" => "NONE"
+        })
+
+      assert [pack, prompt] =
+               inject_stateful(context.agent.uid, foreground_request, reloaded, input)
+
+      assert pack_text(pack) =~ "entity: concepts/wire-format"
+      assert environment_text(prompt) =~ "memory: concepts/wire-format"
+
+      authorized_conversation = insert_conversation!(context.agent.uid)
+
+      authorized_request =
+        injecting_request(%{
+          "ambient_route_action" => "NEW_WORK",
+          "ambient_route_authority" => "EXPLICIT_REQUEST"
+        })
+
+      assert [_authorized_pack, _authorized_prompt] =
+               inject_stateful(
+                 context.agent.uid,
+                 authorized_request,
+                 authorized_conversation,
+                 input
+               )
+    end
   end
 
   defp inject_stateful(subject_uid, request, conversation, input) do
@@ -449,10 +580,11 @@ defmodule Ankole.AIGateway.HostedTools.BrainTest do
     items
   end
 
-  defp loop!(subject_uid, declaration) do
+  defp loop!(subject_uid, declaration, metadata \\ %{}) do
     request = %{
       "model" => "openrouter/openai/gpt-5.6",
       "tools" => [declaration],
+      "metadata" => metadata,
       "input" => [user_message("hello")]
     }
 

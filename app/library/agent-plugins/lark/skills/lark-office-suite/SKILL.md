@@ -2,6 +2,7 @@
 name: lark-office-suite
 description: "Operate Lark cloud content as this digital employee's application bot: Docs, Drive, Wiki, Sheets, Base, Slides, Whiteboard, Lark Markdown, and read-only Mail. Use for Lark URLs, cloud tokens, and mailbox reads, not local .docx or .xlsx files."
 default_enabled: true
+ankole-runtime: any
 category: productivity
 tags: [lark, docs, drive, wiki, sheets, base, slides, whiteboard, markdown, mail]
 metadata:

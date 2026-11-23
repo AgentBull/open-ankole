@@ -20,7 +20,8 @@ defmodule Ankole.Brain.CalibrationTest do
 
     base_url =
       start_upstream_server(fn %{path: "chat/completions", body: body} ->
-        prompt = body["messages"] |> List.first() |> Map.fetch!("content")
+        prompt = user_message_content(body["messages"])
+        send(test_pid, {:calibration_request, body})
         send(test_pid, {:calibration_prompt, prompt})
 
         answer =
@@ -74,9 +75,22 @@ defmodule Ankole.Brain.CalibrationTest do
     assert {:ok, _object} = Objects.soft_delete(context.object.slug)
     assert %{status: :ok, candidates: 1, graded: 1} = Calibration.grade_takes()
 
+    assert_receive {:calibration_request, request}
+    assert request["prompt_cache_key"] == "brain:dreaming:calibration"
+
+    assert [
+             %{"role" => "system", "content" => instructions},
+             %{"role" => "user", "content" => user_prompt}
+           ] = request["messages"]
+
+    assert instructions =~ "Grade one prediction against the available evidence."
+    refute instructions =~ channel_text
+
     assert_receive {:calibration_prompt, prompt}
+    assert prompt == user_prompt
     assert prompt =~ channel_text
     refute prompt =~ object_text
+    refute prompt =~ "Grade one prediction against the available evidence."
     assert Repo.get!(Claim, object_take.id).graded_at == nil
     assert Repo.get!(Claim, channel_take.id).graded_quality == "correct"
   end
@@ -116,6 +130,12 @@ defmodule Ankole.Brain.CalibrationTest do
     assert {:ok, holder} = Objects.get_by_slug("people/#{context.member.uid}")
     assert holder.body =~ "Resolved takes: 1; Brier score: 0.16."
     refute holder.body =~ "Resolved takes: 2"
+  end
+
+  defp user_message_content(messages) do
+    messages
+    |> Enum.find(&(&1["role"] == "user"))
+    |> Map.fetch!("content")
   end
 
   defp write_take!(member, parent, claim) do

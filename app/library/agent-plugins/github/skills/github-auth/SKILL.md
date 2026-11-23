@@ -2,6 +2,7 @@
 name: github-auth
 description: "Establish GitHub CLI authentication from the operator-managed Ankole WorkerEnv token."
 default_enabled: false
+ankole-runtime: any
 category: github
 tags: [GitHub, Authentication, Git, gh-cli, API]
 version: 1.2.1

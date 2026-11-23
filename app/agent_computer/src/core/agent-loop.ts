@@ -97,7 +97,7 @@ interface RepeatedToolFailureState {
 }
 
 interface ToolFailure {
-  kind: 'runtime_error' | 'unknown_tool' | 'caller_not_allowed' | 'invalid_arguments'
+  kind: 'runtime_error' | 'unknown_tool' | 'caller_not_allowed' | 'ambient_route_not_allowed' | 'invalid_arguments'
   namespace: string | undefined
   toolName: string
   arguments: unknown
@@ -390,6 +390,32 @@ export async function runAgentLoop(config: AgentLoopConfig): Promise<AgentLoopRe
       // `execute` (`wrapToolExecute`) so `execute()` truly receives
       // `z.output<TZod>`.
       if (!tool) return undefined
+
+      const ambientBlockReason = ambientRouteBlockReason(config.ambientRoute, tool, displayName)
+      if (ambientBlockReason) {
+        const route = config.ambientRoute!
+        config.logger?.warning('worker.tool_call_rejected', 'worker tool call rejected', {
+          actor_event_id: config.stateful.actorEventID,
+          tool_name: wireToolName,
+          ...(meta?.namespace ? { tool_namespace: meta.namespace } : {}),
+          tool_call_id: ctx.toolCall.id,
+          failure_code: 'ambient_route_not_allowed',
+          ambient_route_action: route.action,
+          ambient_route_authority: route.authority
+        })
+        noteToolFailure({
+          kind: 'ambient_route_not_allowed',
+          namespace: meta?.namespace,
+          toolName: wireToolName,
+          arguments: `${route.action}:${route.authority}`
+        })
+        const result: BeforeToolCallResult = {
+          block: true,
+          reason: formatToolError(ambientBlockReason)
+        }
+        return result
+      }
+
       const parsed = tool.schema.safeParse(ctx.toolCall.arguments)
       if (!parsed.success) {
         config.logger?.warning('worker.tool_call_rejected', 'worker tool call rejected', {
@@ -822,6 +848,21 @@ function findLastAssistantMessage(messages: unknown[]): PiAssistantMessage | und
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index] as PiMessage
     if (message.role === 'assistant') return message
+  }
+  return undefined
+}
+
+function ambientRouteBlockReason(
+  route: AgentLoopConfig['ambientRoute'],
+  tool: WorkerAgentTool,
+  displayName: string
+): string | undefined {
+  if (!route) return undefined
+  if (route.action === 'NEW_WORK' && route.authority === 'NONE') {
+    return `Tool ${displayName} is not allowed on an unauthorized NEW_WORK ambient turn. Ask the user for confirmation without calling tools.`
+  }
+  if (route.action === 'FOREGROUND_REPLY' && tool.isReadOnly !== true) {
+    return `Tool ${displayName} is not read-only and is not allowed on a FOREGROUND_REPLY ambient turn.`
   }
   return undefined
 }

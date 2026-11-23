@@ -1,6 +1,6 @@
 ---
 name: create-deep-research
-description: "Create a Deep Research BackgroundAgentJob for substantial evidence-based investigation of the external world: what is true, how it may develop, or whether a claim or forecast holds. This includes asset prices, demand, competition, and risk even when the reader will act on the result. Use research-for-planning only for researching constraints and options to design a controllable operating, product, market-entry, or launch plan."
+description: "Create a Deep Research BackgroundAgentJob for substantial evidence-based external-world investigation: what is true, how it develops, or if a claim/forecast holds (including prices, demand, competition, and risk, even for action). Use research-for-planning only for constraints/options to design a controllable operating, product, market-entry, or launch plan."
 default_enabled: true
 ankole-runtime: main
 category: research

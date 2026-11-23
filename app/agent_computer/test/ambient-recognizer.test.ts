@@ -142,9 +142,16 @@ describe('ambient intervention recognizer', () => {
       { currentTime: new Date('2026-07-18T12:34:00Z') }
     )
 
+    const modelInstructions = String(bodies[0]!.instructions ?? '')
     const modelInput = JSON.stringify(bodies[0]!.input)
 
+    expect(modelInstructions.indexOf('You are the ambient intent router')).toBeLessThan(
+      modelInstructions.indexOf('<about>')
+    )
     expect(modelInput).toContain('current_time: 2026-07-18 20:34')
+    expect(modelInput.indexOf('New Messages (not yet judged')).toBeLessThan(
+      modelInput.indexOf('current_time: 2026-07-18 20:34')
+    )
     expect(modelInput).toContain('platform: Lark / Feishu')
     expect(modelInput).toContain('group_name: Ops')
     expect(modelInput).toContain('20:00 [human] Unknown')

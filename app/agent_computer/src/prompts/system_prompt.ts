@@ -23,7 +23,6 @@ export type BuildAgentSystemPromptOptions = {
   turnStart: TurnStart
   agentConversationContext?: AgentConversationContextResponse
   availableToolNames?: string[]
-  ambientRoute?: AmbientTextTurnRoute
 }
 
 /**
@@ -47,7 +46,6 @@ export function buildAgentSystemPrompt(opts: BuildAgentSystemPromptOptions): str
     soul.trim(),
     missionSection(mission),
     completionContractSection(),
-    ambientRouteSection(opts.ambientRoute),
     backgroundAgentJobPolicySection(opts),
     workflowPolicySection(opts),
     longTermMemorySection(opts),
@@ -60,8 +58,8 @@ export function buildAgentSystemPrompt(opts: BuildAgentSystemPromptOptions): str
     .join('\n\n')
 }
 
-/** Enforces the host-committed ambient route in trusted prompt text. */
-function ambientRouteSection(route: AmbientTextTurnRoute | undefined): string {
+/** Enforces the host-committed ambient route in trusted per-turn user context. */
+export function ambientRouteSection(route: AmbientTextTurnRoute | undefined): string {
   if (!route) return ''
 
   if (route.action === 'FOREGROUND_REPLY') {
@@ -300,7 +298,7 @@ Current worker-image baseline: Python 3.12-compatible tooling via the agent Pyth
 
 Tool processes can receive task-scoped credentials and unrelated runtime secrets. These values authorize external systems; they are not diagnostic data. Use only credentials named by the task or a loaded Skill. If one is missing, report the configuration blocker; do not enumerate the environment or credential stores, and never print secret values.
 
-Persistence model: Cross-session user files preserve uploads and deliverables. Agent-installed Skills persist across sessions and are accessed through the Skill tools. Agent documents are read-only projections of PostgreSQL state. Use the current workspace's temp directory for scratch data.
+Persistence model: Cross-session user files preserve uploads and deliverables. Agent-installed Skills persist across sessions and are accessed through the Skill tools. Agent documents are read-only projections of durable state. Use the current workspace's temp directory for scratch data.
 
 This is not a hardened security sandbox.
 </about_computer>

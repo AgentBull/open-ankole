@@ -4,8 +4,10 @@ import { Buffer } from 'node:buffer'
 import { tmpdir } from 'node:os'
 import { z } from 'zod'
 import { runAgentLoop } from '../../src/core/agent-loop'
-import { zodToJSONSchema, type ContentPart } from '../../src/core/llm'
+import { createModel, zodToJSONSchema, type ContentPart } from '../../src/core/llm'
 import { buildResponseCreateParams } from '../../src/core/llm/wire'
+import { defineWorkerTool } from '../../src/core/worker-tool'
+import type { AgentLoopLogger, ReplyPresentationEvent } from '../../src/core/types'
 import { actorEventUserContent } from '../../src/core/turns/actor_event_content'
 import { actorEventText } from '../../src/core/turns/actor_event_text'
 import { channelContextModelMessages } from '../../src/core/turns/channel_context'
@@ -21,14 +23,17 @@ import {
 } from '../../src/core/ai_gateway_transport'
 import { acquireTurnAIGatewayAccess } from '../../src/core/turns/turn_ai_gateway_access'
 import {
-  hostedToolsForAmbientRoute,
+  buildTextTurnSystemPrompt,
+  buildTextTurnUserPrompt,
+  textTurnHostedTools,
   textTurnReplyRepair,
   textTurnResultFromAssistantReply,
-  toolsForAmbientRoute
+  textTurnStatefulContext
 } from '../../src/core/turns/text_turn'
+import { create } from '@bufbuild/protobuf'
+import { AgentConversationContextResponseSchema } from '../../src/fabric/generated/ankole/runtime_fabric/v1/rpc_pb'
 import { steeringMessages, steeringMessagesWithAcknowledgement } from '../../src/core/turns/turn_control'
 import type { TurnStart } from '../../src/lanes/actor_lane'
-import { create } from '@bufbuild/protobuf'
 import { AIGatewayAPIKeyResponseSchema } from '../../src/fabric/generated/ankole/runtime_fabric/v1/rpc_pb'
 import type { AIGatewayAPIKeyResponse } from '../../src/lanes/rpc_lane'
 import {
@@ -38,6 +43,7 @@ import {
   imageActorEventPayload,
   modelRefForTest,
   testResponseSocket,
+  toolResultsRecordedFrame,
   turnStartForTest,
   withImageWorkspace
 } from '../support/llm'
@@ -848,26 +854,199 @@ describe('@ankole/agent-computer llm helpers: transport and actor content', () =
     ])
   })
 
-  it('restricts ambient tool catalogs at the route boundary', () => {
-    const localTools = [
-      { name: 'read_file', isReadOnly: true },
-      { name: 'apply_patch', isReadOnly: false },
-      { name: 'undeclared_legacy_tool' }
-    ]
-    const hostedTools = [{ type: 'web_search' }, { type: 'image_generation' }, { type: 'brain' }]
-    const foregroundReply = { action: 'FOREGROUND_REPLY', authority: 'NONE' } as const
-    const confirmation = { action: 'NEW_WORK', authority: 'NONE' } as const
-    const authorizedWork = { action: 'NEW_WORK', authority: 'EXPLICIT_REQUEST' } as const
+  it('keeps prompt and tool declarations identical across routes while enforcing ambient routes at runtime', async () => {
+    const turnStart = {
+      ...turnStartForTest(),
+      hosted_tools: [{ type: 'web_search' as const }, { type: 'image_generation' as const }, { type: 'brain' as const }]
+    }
+    const conversationContext = create(AgentConversationContextResponseSchema, {
+      agent: { displayName: 'Ops Agent' },
+      conversation: { id: 'conv-1', timezone: 'UTC' },
+      soul: 'Be concise.'
+    })
+    const localTools = [{ name: 'read_file' }, { name: 'apply_patch' }]
+    const hostedTools = textTurnHostedTools(turnStart)
+    expect(hostedTools).toEqual([{ type: 'web_search' }, { type: 'image_generation' }, { type: 'brain', inject: true }])
 
-    expect(toolsForAmbientRoute(localTools, foregroundReply).map(tool => tool.name)).toEqual(['read_file'])
-    expect(hostedToolsForAmbientRoute(hostedTools, foregroundReply).map(tool => tool.type)).toEqual([
-      'web_search',
-      'brain'
+    const basePrompt = buildTextTurnSystemPrompt({
+      userFilesRoot: '/user-files',
+      workspaceRoot: '/workspace',
+      turnStart,
+      agentConversationContext: conversationContext,
+      tools: localTools,
+      hostedTools
+    })
+    expect(basePrompt).not.toContain('<ambient_route>')
+
+    const foregroundPrompt = buildTextTurnUserPrompt(
+      turnStart,
+      { role: 'user', content: 'Status?' },
+      { timezone: 'UTC', ambientRoute: { action: 'FOREGROUND_REPLY', authority: 'NONE' } }
+    )
+    expect(JSON.stringify(foregroundPrompt.content)).toContain('<ambient_route>')
+    expect(textTurnStatefulContext(turnStart, 'conv-1', { action: 'NEW_WORK', authority: 'NONE' })).toMatchObject({
+      metadata: {
+        ambient_route_action: 'NEW_WORK',
+        ambient_route_authority: 'NONE'
+      }
+    })
+
+    const runRouteToolRound = async (
+      ambientRoute: { action: 'FOREGROUND_REPLY' | 'NEW_WORK'; authority: 'NONE' | 'EXPLICIT_REQUEST' },
+      toolCalls: Array<{ id: string; name: string; args: string }>
+    ) => {
+      const executed: string[] = []
+      const presentation: ReplyPresentationEvent[] = []
+      const rejections: JSONObject[] = []
+      const logger: AgentLoopLogger = {
+        info() {},
+        warning(event, _message, fields) {
+          if (event === 'worker.tool_call_rejected' && fields) rejections.push(fields)
+        }
+      }
+      let creates = 0
+      const sentPayloads: JSONObject[] = []
+      const model = createModel({
+        apiKey: 'unused',
+        baseURL: 'http://aigateway.invalid/api/v1/ai-gateway',
+        selector: 'primary',
+        responseWebSocket: {
+          kind: 'aigateway-websocket',
+          url: 'ws://aigateway.invalid/api/v1/ai-gateway/responses',
+          authorization: () => 'Bearer agent-key',
+          createWebSocket: (_url, init) =>
+            fakeResponseSocket(init, data => {
+              const payload = JSON.parse(data) as JSONObject
+              sentPayloads.push(payload)
+              if (payload.type === 'response.tool_results.record') {
+                return [toolResultsRecordedFrame(`resp_ambient_results_${creates}`)]
+              }
+              creates += 1
+              if (creates === 1) {
+                return [
+                  {
+                    type: 'response.completed',
+                    response: {
+                      id: 'resp_ambient_call',
+                      status: 'completed',
+                      output: toolCalls.map(call => ({
+                        type: 'function_call',
+                        id: `fc_${call.id}`,
+                        call_id: call.id,
+                        name: call.name,
+                        arguments: call.args
+                      }))
+                    }
+                  }
+                ]
+              }
+              return [
+                {
+                  type: 'response.completed',
+                  response: {
+                    id: 'resp_ambient_done',
+                    status: 'completed',
+                    output: [
+                      {
+                        type: 'message',
+                        role: 'assistant',
+                        content: [{ type: 'output_text', text: 'done' }]
+                      }
+                    ]
+                  }
+                }
+              ]
+            })
+        }
+      })
+
+      await runAgentLoop({
+        model,
+        maxModelIterations: 10,
+        messages: [{ role: 'user', content: 'run tools' }],
+        stateful: {
+          actorEventID: '00000000-0000-0000-0000-000000000091',
+          conversationID: '91919191-9191-9191-9191-919191919191'
+        },
+        ambientRoute,
+        tools: [
+          defineWorkerTool({
+            name: 'read_file',
+            description: 'Read a file',
+            schema: z.object({}),
+            executionMode: 'sequential',
+            isReadOnly: true,
+            describeActivity: () => 'Read file',
+            execute: async () => {
+              executed.push('read_file')
+              return { content: [{ type: 'text', text: 'read ok' }], details: {} }
+            }
+          }),
+          defineWorkerTool({
+            name: 'apply_patch',
+            description: 'Modify a file',
+            schema: z.object({}),
+            executionMode: 'sequential',
+            isReadOnly: false,
+            describeActivity: () => 'Apply patch',
+            execute: async () => {
+              executed.push('apply_patch')
+              return { content: [{ type: 'text', text: 'patch ok' }], details: {} }
+            }
+          }),
+          defineWorkerTool({
+            name: 'undeclared_legacy_tool',
+            description: 'Legacy tool without explicit read-only marker',
+            schema: z.object({}),
+            executionMode: 'sequential',
+            describeActivity: () => 'Legacy',
+            execute: async () => {
+              executed.push('undeclared_legacy_tool')
+              return { content: [{ type: 'text', text: 'legacy ok' }], details: {} }
+            }
+          })
+        ],
+        logger,
+        onPresentationEvent: event => {
+          presentation.push(event)
+        }
+      })
+
+      return { executed, presentation, rejections, sentPayloads }
+    }
+
+    const confirmation = await runRouteToolRound({ action: 'NEW_WORK', authority: 'NONE' }, [
+      { id: 'call_read', name: 'read_file', args: '{}' },
+      { id: 'call_patch', name: 'apply_patch', args: '{}' }
     ])
-    expect(toolsForAmbientRoute(localTools, confirmation)).toEqual([])
-    expect(hostedToolsForAmbientRoute(hostedTools, confirmation)).toEqual([])
-    expect(toolsForAmbientRoute(localTools, authorizedWork)).toBe(localTools)
-    expect(hostedToolsForAmbientRoute(hostedTools, authorizedWork)).toBe(hostedTools)
+    expect(confirmation.executed).toEqual([])
+    expect(confirmation.presentation.filter(event => event.kind === 'tool.activity')).toEqual([])
+    expect(confirmation.rejections.map(item => [item.tool_name, item.failure_code])).toEqual([
+      ['read_file', 'ambient_route_not_allowed'],
+      ['apply_patch', 'ambient_route_not_allowed']
+    ])
+    const confirmationOutputs = confirmation.sentPayloads
+      .filter(payload => payload.type === 'response.tool_results.record')
+      .flatMap(payload => payload.input as JSONObject[])
+    expect(confirmationOutputs.every(item => String(item.output).startsWith('Error:'))).toBe(true)
+
+    const foreground = await runRouteToolRound({ action: 'FOREGROUND_REPLY', authority: 'NONE' }, [
+      { id: 'call_read', name: 'read_file', args: '{}' },
+      { id: 'call_patch', name: 'apply_patch', args: '{}' },
+      { id: 'call_legacy', name: 'undeclared_legacy_tool', args: '{}' }
+    ])
+    expect(foreground.executed).toEqual(['read_file'])
+    expect(foreground.presentation.filter(event => event.kind === 'tool.activity')).toHaveLength(2)
+    expect(foreground.rejections.map(item => [item.tool_name, item.failure_code])).toEqual([
+      ['apply_patch', 'ambient_route_not_allowed'],
+      ['undeclared_legacy_tool', 'ambient_route_not_allowed']
+    ])
+
+    const authorized = await runRouteToolRound({ action: 'NEW_WORK', authority: 'EXPLICIT_REQUEST' }, [
+      { id: 'call_patch', name: 'apply_patch', args: '{}' }
+    ])
+    expect(authorized.executed).toEqual(['apply_patch'])
+    expect(authorized.rejections).toEqual([])
   })
 
   it('keeps the uid in group speaker labels and omits a DM speaker', () => {

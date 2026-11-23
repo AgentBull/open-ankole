@@ -1,5 +1,11 @@
 # Changelog
 
+## Version 1.7.2 (2026-11-23)
+
+- Keep agent system prompts and tool declarations byte-identical across main, ambient, and scheduled turns for prompt caching by placing `<ambient_route>` and scheduled-reply directives in the turn user message and enforcing ambient tool and Brain route boundaries at runtime, while placing the ambient recognizer's static policy before agent identity and `current_time` at the end of its user prompt.
+- Separate static instructions from dynamic payloads with stable `prompt_cache_key` routing for AIGateway history compaction (adding `UNVERIFIED:` epistemic-stance marking and `affinity_key` handling) and Brain extraction, synthesis, and Dreaming calls, and replace the interactive Codex prompt with a concise headless Background Agent Job prompt while preserving the 10,000-token tool output limit.
+- Standardize progressive disclosure for shipped Skills (single-line catalog descriptions within 75 `o200k_base` tokens, `SKILL.md` within 8 KiB / 250 lines with explicit `ankole-runtime`, and detailed procedures in Skill-scoped `references/`) enforced by `mix ankole.skills.lint`, add CI gates for skill linting and prompt-surface / architecture-leak checks, and update the owning design and prompt-assembly docs.
+
 ## Version 1.7.1 (2026-11-19)
 
 - Align `AGENTS.md`, `docs/design-docs/AIGateway.md`, and UIKit test fixtures with OpenAnkole's single-installation Ecto, `/api/v1` OpenApiSpex, and stateful Claude conversation contracts, and omit the unused `multi_agent_v2_dynamic_tools` Codex flag under Codex CLI `0.158.0`.

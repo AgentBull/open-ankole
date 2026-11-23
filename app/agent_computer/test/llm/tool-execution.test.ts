@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import type { JsonObject as JSONObject } from '@agentbull/active-support'
 import { z } from 'zod'
 import { runAgentLoop } from '../../src/core/agent-loop'
-import type { ReplyPresentationEvent } from '../../src/core/types'
+import type { AgentLoopLogger, ReplyPresentationEvent } from '../../src/core/types'
 import { createModel } from '../../src/core/llm'
 import { defineWorkerTool } from '../../src/core'
 import { fakeResponseSocket, parallelReadTool, sleep, toolResultsRecordedFrame } from '../support/llm'
@@ -1397,5 +1397,168 @@ describe('@ankole/agent-computer llm helpers: tool execution scheduling and guar
         tools: [expect.objectContaining({ type: 'function', name: 'b' })]
       })
     ])
+  })
+
+  it('enforces ambientRoute in beforeToolCall without flickering tool.activity', async () => {
+    const runRoute = async (
+      ambientRoute: { action: 'FOREGROUND_REPLY' | 'NEW_WORK'; authority: 'NONE' | 'EXPLICIT_REQUEST' },
+      rounds: Array<Array<{ id: string; name: string; args: string }>>
+    ) => {
+      const executed: string[] = []
+      const presentation: ReplyPresentationEvent[] = []
+      const rejections: JSONObject[] = []
+      const sentPayloads: JSONObject[] = []
+      let creates = 0
+      const logger: AgentLoopLogger = {
+        info() {},
+        warning(event, _message, fields) {
+          if (event === 'worker.tool_call_rejected' && fields) rejections.push(fields)
+        }
+      }
+
+      const model = createModel({
+        apiKey: 'unused',
+        baseURL: 'http://aigateway.invalid/api/v1/ai-gateway',
+        selector: 'primary',
+        responseWebSocket: {
+          kind: 'aigateway-websocket',
+          url: 'ws://aigateway.invalid/api/v1/ai-gateway/responses',
+          authorization: () => 'Bearer agent-key',
+          createWebSocket: (_url, init) =>
+            fakeResponseSocket(init, data => {
+              const payload = JSON.parse(data) as JSONObject
+              sentPayloads.push(payload)
+              if (payload.type === 'response.tool_results.record') {
+                return [toolResultsRecordedFrame(`resp_ambient_results_${creates}`)]
+              }
+              creates += 1
+              const calls = rounds[creates - 1]
+              if (calls) {
+                return [
+                  {
+                    type: 'response.completed',
+                    response: {
+                      id: `resp_ambient_${creates}`,
+                      status: 'completed',
+                      output: calls.map(call => ({
+                        type: 'function_call',
+                        id: `fc_${call.id}`,
+                        call_id: call.id,
+                        name: call.name,
+                        arguments: call.args
+                      }))
+                    }
+                  }
+                ]
+              }
+              return [
+                {
+                  type: 'response.completed',
+                  response: {
+                    id: 'resp_ambient_done',
+                    status: 'completed',
+                    output: [
+                      {
+                        type: 'message',
+                        role: 'assistant',
+                        content: [{ type: 'output_text', text: 'done' }]
+                      }
+                    ]
+                  }
+                }
+              ]
+            })
+        }
+      })
+
+      await runAgentLoop({
+        model,
+        maxModelIterations: 10,
+        messages: [{ role: 'user', content: 'run ambient route check' }],
+        stateful: {
+          actorEventID: '00000000-0000-0000-0000-000000000092',
+          conversationID: '92929292-9292-9292-9292-929292929292'
+        },
+        ambientRoute,
+        tools: [
+          defineWorkerTool({
+            name: 'read_file',
+            description: 'Read a file',
+            schema: z.object({}),
+            executionMode: 'sequential',
+            isReadOnly: true,
+            describeActivity: () => 'Read file',
+            execute: async () => {
+              executed.push('read_file')
+              return { content: [{ type: 'text', text: 'read ok' }], details: {} }
+            }
+          }),
+          defineWorkerTool({
+            name: 'apply_patch',
+            description: 'Modify a file',
+            schema: z.object({}),
+            executionMode: 'sequential',
+            isReadOnly: false,
+            describeActivity: () => 'Apply patch',
+            execute: async () => {
+              executed.push('apply_patch')
+              return { content: [{ type: 'text', text: 'patch ok' }], details: {} }
+            }
+          }),
+          defineWorkerTool({
+            name: 'undeclared_legacy_tool',
+            description: 'Legacy tool without explicit read-only marker',
+            schema: z.object({}),
+            executionMode: 'sequential',
+            describeActivity: () => 'Legacy',
+            execute: async () => {
+              executed.push('undeclared_legacy_tool')
+              return { content: [{ type: 'text', text: 'legacy ok' }], details: {} }
+            }
+          })
+        ],
+        logger,
+        onPresentationEvent: event => {
+          presentation.push(event)
+        }
+      })
+
+      return { executed, presentation, rejections, sentPayloads }
+    }
+
+    const confirmation = await runRoute({ action: 'NEW_WORK', authority: 'NONE' }, [
+      [{ id: 'call_read', name: 'read_file', args: '{}' }],
+      [{ id: 'call_read_2', name: 'read_file', args: '{}' }]
+    ])
+    expect(confirmation.executed).toEqual([])
+    expect(confirmation.presentation.filter(event => event.kind === 'tool.activity')).toEqual([])
+    expect(confirmation.rejections.map(item => [item.tool_name, item.failure_code])).toEqual([
+      ['read_file', 'ambient_route_not_allowed'],
+      ['read_file', 'ambient_route_not_allowed']
+    ])
+    const confirmationRecords = confirmation.sentPayloads.filter(p => p.type === 'response.tool_results.record')
+    expect(confirmationRecords).toHaveLength(2)
+    expect(String((confirmationRecords[0]!.input as JSONObject[])[0]!.output)).toStartWith('Error:')
+    expect(JSON.stringify(confirmationRecords[1]!.input)).toContain('Tool loop warning: repeated_tool_failure')
+
+    const foreground = await runRoute({ action: 'FOREGROUND_REPLY', authority: 'NONE' }, [
+      [
+        { id: 'call_read', name: 'read_file', args: '{}' },
+        { id: 'call_patch', name: 'apply_patch', args: '{}' },
+        { id: 'call_legacy', name: 'undeclared_legacy_tool', args: '{}' }
+      ]
+    ])
+    expect(foreground.executed).toEqual(['read_file'])
+    expect(foreground.presentation.filter(event => event.kind === 'tool.activity')).toHaveLength(2)
+    expect(foreground.rejections.map(item => [item.tool_name, item.failure_code])).toEqual([
+      ['apply_patch', 'ambient_route_not_allowed'],
+      ['undeclared_legacy_tool', 'ambient_route_not_allowed']
+    ])
+
+    const authorized = await runRoute({ action: 'NEW_WORK', authority: 'EXPLICIT_REQUEST' }, [
+      [{ id: 'call_patch', name: 'apply_patch', args: '{}' }]
+    ])
+    expect(authorized.executed).toEqual(['apply_patch'])
+    expect(authorized.rejections).toEqual([])
   })
 })

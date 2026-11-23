@@ -336,12 +336,26 @@ recomputes effective confidence on read, and `brain.forgetting` holds the
 halflives.
 
 These model calls are stateless and have no tools or conversation history.
-Grading, contradiction checks, and pattern detection receive available claim
-dates, context, attribution, and provenance. Grading also receives the Take's
-period and provenance. On-demand synthesis receives claim IDs, pages, holders,
-and provenance, with Fact validity dates and Take periods kept separate.
-Brain model calls set a phase-specific `brain.*` caller in AIGateway traces,
-so operators can inspect each prompt and result in Langfuse.
+`Ankole.Brain.ModelCalls.complete_text/3` and `complete_json/3` accept optional
+`:instructions` and `:prompt_cache_key` options and forward non-empty values to
+AIGateway so static rubrics and JSON contracts stay separate from dynamic
+evidence payloads for prefix caching:
+
+- `Ankole.Brain.Synthesis` -> `caller: "brain.synthesis"`, `prompt_cache_key: "brain:synthesis"`
+- `Ankole.Brain.Calibration` -> `caller: "brain.dreaming.calibration"`, `prompt_cache_key: "brain:dreaming:calibration"`
+- `Ankole.Brain.Patterns` -> `caller: "brain.dreaming.patterns"`, `prompt_cache_key: "brain:dreaming:patterns"`
+- `Ankole.Brain.Dreaming` -> `caller: "brain.dreaming.timelines"` (`"brain:dreaming:timelines"`) and `caller: "brain.dreaming.contradictions"` (`"brain:dreaming:contradictions"`)
+- `Ankole.Brain.SkillLessons` (review phase) -> `caller: "brain.dreaming.skill_lesson_review"`, `prompt_cache_key: "brain:dreaming:skill_lesson_review"` (reflection runs as a Background Agent Job)
+- `Ankole.Brain.SourceLearning` -> `caller: "brain.source_learning"`, `prompt_cache_key: "brain:source_learning"` (keeps the source extraction schema without `valid_from`)
+- `Ankole.Brain.SignalsLearning` -> `caller: "brain.signals_learning"`, `prompt_cache_key: "brain:signals_learning"` (preserves optional `valid_from` on extracted facts)
+
+Grading, contradiction checks, and pattern detection keep claim `valid_from`
+dates, context, attribution, and provenance in their dynamic evidence inputs;
+grading also keeps the Take's period and provenance. On-demand synthesis keeps
+claim IDs, pages, holders, and provenance, with Fact validity dates (`valid_from`
+and `valid_until`) and Take periods kept separate. All Brain model calls set a
+phase-specific `brain.*` caller in AIGateway traces, so operators can inspect
+each prompt and result in Langfuse.
 
 ## Configuration
 

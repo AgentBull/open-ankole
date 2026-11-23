@@ -960,6 +960,21 @@ injected items are ordinary request input, so they persist with the Response
 chain. A request without a stateful conversation gets no injection. An
 injection failure leaves the request unchanged.
 
+`HostedTools.Brain` enforces ambient turn route metadata on every request:
+`FOREGROUND_REPLY` keeps both memory injection and read/write Brain
+operations, whereas `metadata.ambient_route_action == "NEW_WORK"` with
+`metadata.ambient_route_authority == "NONE"` causes `inject_stateful/4` to
+skip injection and `job/2` to mark every Brain operation with a failed
+`brain_route_not_allowed` preflight outcome before `Ankole.Brain.Tools.execute/3`
+runs. Because gating lives in `metadata`, callers can keep `{"type": "brain"}`
+stable in `tools` across main and ambient turns without exposing Brain writes
+or memory injection on confirmation turns.
+
+Stateless internal callers such as `CompactionSummarizer` and
+`Ankole.Brain.ModelCalls` pass static rules in `"instructions"` separately from
+dynamic payloads in `"input"` and supply stable `"prompt_cache_key"` values so
+upstream providers can reuse prompt prefixes across calls.
+
 ## Record Tool Results before the Next Model Call
 
 The Worker can send `response.tool_results.record` before the next model call.
@@ -1162,12 +1177,24 @@ an artifact and uses the normal overflow policy. AIGateway does not discard an
 active Tool Search pair to make a checkpoint fit.
 
 The summarizer uses the standard streaming Responses preparation and stream
-owner. AIGateway creates its request context before model resolution and keeps
-the same cache key when it prepares the provider request. It reads the stream
-until a terminal Response arrives. A completed Response supplies the summary,
-and a `max_output_tokens` incomplete Response can start the existing larger
-output retry. A failed Response or a stream that closes before a terminal
-Response cannot produce a compaction artifact.
+owner. `CompactionPrompt.system_prompt/1` (`:initial` or `:update`, with
+`system_prompt/0` defaulting to `:initial`) supplies the static `"instructions"`
+block — framing the 11-section output format, initial/update mode rules,
+reverse-signal cancellation rule, focus guidance, recent-context rule, and the
+epistemic stance rule (`UNVERIFIED: <claim> — <basis>` for unverified claims or
+assumptions) — while `CompactionPrompt.build_history_user_prompt/1` sends only
+`<conversation>`, optional `<previous_chat_history>`, optional
+`<recent_context_verbatim>`, and a one-line closing cue in `"input"`.
+`CompactionSummarizer` passes `mode` (`:initial` or `:update`) in both
+`render_budget/3` and `request_summary/5`, keeps `reasoning: %{"effort" => "low"}`,
+and sets `"prompt_cache_key"` from `request_context["affinity_key"]` when
+present (falling back to `"compaction:summary:initial"` or
+`"compaction:summary:update"`, because `RequestContext.prepare/2` writes a
+fresh UUIDv7 into `"cache_key"` whenever no affinity key exists). AIGateway
+reads the stream until a terminal Response arrives. A completed Response
+supplies the summary, and a `max_output_tokens` incomplete Response can start
+the existing larger output retry. A failed Response or a stream that closes
+before a terminal Response cannot produce a compaction artifact.
 
 Internal history traversal supports 10,000 rows.
 The public chain API returns at most 500 rows.

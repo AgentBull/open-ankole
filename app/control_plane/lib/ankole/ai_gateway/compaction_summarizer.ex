@@ -26,6 +26,7 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
   end
 
   defp summarize_rendered(subject_uid, runtime, items, previous_chat_history, opts) do
+    mode = summary_mode(previous_chat_history)
     recent_context_verbatim = render_recent_context(Keyword.get(opts, :recent_items, []))
     budget = render_budget(runtime, previous_chat_history, recent_context_verbatim)
     caps = CompactionRender.default_caps()
@@ -33,7 +34,7 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
     prompt =
       build_summarizer_prompt(items, previous_chat_history, recent_context_verbatim, budget, caps)
 
-    case call_summarizer(subject_uid, runtime, prompt, identity(opts)) do
+    case call_summarizer(subject_uid, runtime, prompt, mode, identity(opts)) do
       {:ok, summary} ->
         {:ok, summary}
 
@@ -51,7 +52,7 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
               tight_caps
             )
 
-          call_summarizer(subject_uid, runtime, tight_prompt, identity(opts))
+          call_summarizer(subject_uid, runtime, tight_prompt, mode, identity(opts))
         else
           error
         end
@@ -80,9 +81,11 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
   end
 
   defp render_budget(runtime, previous_chat_history, recent_context_verbatim) do
+    mode = summary_mode(previous_chat_history)
+
     scaffold =
       CompactionRender.approx_tokens(
-        CompactionPrompt.system_prompt() <>
+        CompactionPrompt.system_prompt(mode) <>
           CompactionPrompt.build_history_user_prompt(%{conversation_text: ""})
       ) + 512
 
@@ -108,30 +111,36 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
   # ran out of output room, or returned nothing this round. Both retry once with
   # the larger output cap. Only the truncated case can fall back to its first
   # result, because an unusable result carries no summary to keep.
-  defp call_summarizer(subject_uid, runtime, prompt, identity) do
+  defp call_summarizer(subject_uid, runtime, prompt, mode, identity) do
     case request_summary(
            subject_uid,
            runtime,
            prompt,
            summarizer_output_cap(runtime),
-           identity
+           Keyword.put(identity, :compaction_mode, mode)
          ) do
       {:ok, %{truncated: true} = truncated_summary} ->
-        case retry_summary(subject_uid, runtime, prompt, identity) do
+        case retry_summary(subject_uid, runtime, prompt, mode, identity) do
           {:ok, retried_summary} -> {:ok, retried_summary}
           {:error, _retry_failed} -> {:ok, truncated_summary}
         end
 
       {:error, reason} when reason in @unusable_summary_reasons ->
-        retry_summary(subject_uid, runtime, prompt, identity)
+        retry_summary(subject_uid, runtime, prompt, mode, identity)
 
       other ->
         other
     end
   end
 
-  defp retry_summary(subject_uid, runtime, prompt, identity) do
-    request_summary(subject_uid, runtime, prompt, summarizer_retry_output_cap(runtime), identity)
+  defp retry_summary(subject_uid, runtime, prompt, mode, identity) do
+    request_summary(
+      subject_uid,
+      runtime,
+      prompt,
+      summarizer_retry_output_cap(runtime),
+      Keyword.put(identity, :compaction_mode, mode)
+    )
   end
 
   # Scale the output reservation with the summarizer's window so a small-context
@@ -145,17 +154,17 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
   end
 
   defp request_summary(subject_uid, runtime, prompt, max_output_tokens, identity) do
-    cache_key = get_in(runtime, ["request_context", "cache_key"])
+    {mode, identity} = Keyword.pop(identity, :compaction_mode, :initial)
+    cache_key = prompt_cache_key(runtime, mode)
 
-    request =
-      %{
-        "model" => @summarizer_profile,
-        "instructions" => CompactionPrompt.system_prompt(),
-        "input" => prompt,
-        "reasoning" => %{"effort" => "low"},
-        "max_output_tokens" => max_output_tokens
-      }
-      |> maybe_put_prompt_cache_key(cache_key)
+    request = %{
+      "model" => @summarizer_profile,
+      "instructions" => CompactionPrompt.system_prompt(mode),
+      "input" => prompt,
+      "reasoning" => %{"effort" => "low"},
+      "max_output_tokens" => max_output_tokens,
+      "prompt_cache_key" => cache_key
+    }
 
     with {:ok, %{request: request, spec: prepared_request}} <-
            ResponsesPreparation.prepare_with_runtime(
@@ -227,11 +236,28 @@ defmodule Ankole.AIGateway.CompactionSummarizer do
   defp compaction_summary_body(_outcome),
     do: {:error, :compaction_summary_missing_terminal_response}
 
-  defp maybe_put_prompt_cache_key(request, cache_key)
-       when is_binary(cache_key) and cache_key != "",
-       do: Map.put(request, "prompt_cache_key", cache_key)
+  defp summary_mode(previous_chat_history) do
+    if present?(previous_chat_history), do: :update, else: :initial
+  end
 
-  defp maybe_put_prompt_cache_key(request, _cache_key), do: request
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
+  defp prompt_cache_key(runtime, mode) do
+    case get_in(runtime, ["request_context", "affinity_key"]) do
+      affinity_key when is_binary(affinity_key) ->
+        case String.trim(affinity_key) do
+          "" -> fallback_prompt_cache_key(mode)
+          trimmed -> trimmed
+        end
+
+      _missing ->
+        fallback_prompt_cache_key(mode)
+    end
+  end
+
+  defp fallback_prompt_cache_key(:initial), do: "compaction:summary:initial"
+  defp fallback_prompt_cache_key(:update), do: "compaction:summary:update"
 
   defp summary_truncated?(%{"incomplete_details" => %{"reason" => "max_output_tokens"}}), do: true
 

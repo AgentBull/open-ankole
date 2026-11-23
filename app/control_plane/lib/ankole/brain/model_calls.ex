@@ -13,6 +13,9 @@ defmodule Ankole.Brain.ModelCalls do
 
   @doc """
   Runs one prompt against a resolved model profile and returns the output text.
+
+  Supports `:instructions` and `:prompt_cache_key` options; non-empty values
+  are forwarded to AIGateway on `"instructions"` and `"prompt_cache_key"`.
   """
   @spec complete_text(map(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def complete_text(model, prompt, opts \\ []) when is_map(model) and is_binary(prompt) do
@@ -22,6 +25,8 @@ defmodule Ankole.Brain.ModelCalls do
         "input" => prompt,
         "store" => false
       }
+      |> maybe_put_non_empty_binary("instructions", Keyword.get(opts, :instructions))
+      |> maybe_put_non_empty_binary("prompt_cache_key", Keyword.get(opts, :prompt_cache_key))
       |> maybe_put_provider_options(model)
       |> Map.merge(Keyword.get(opts, :request_overrides, %{}))
 
@@ -63,6 +68,12 @@ defmodule Ankole.Brain.ModelCalls do
       end
     end)
   end
+
+  defp maybe_put_non_empty_binary(request, key, value) when is_binary(value) do
+    if String.trim(value) == "", do: request, else: Map.put(request, key, value)
+  end
+
+  defp maybe_put_non_empty_binary(request, _key, _value), do: request
 
   defp maybe_put_provider_options(request, model) do
     case Map.get(model, "provider_options") do

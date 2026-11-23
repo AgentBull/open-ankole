@@ -1,6 +1,6 @@
 ---
 name: brain-learning
-description: Use when material or a thought must become durable memory, and when a remembered fact turns out wrong — learning an article, page, paper, book, file, recording, or meeting transcript; capturing someone's own idea; repairing memory after a correction. Read this before the first learn_source call in a conversation. Routes each material kind to the right learning path, guides the audience scope choice, and owns the write and repair discipline.
+description: Use before the first learn_source call, when storing material or ideas as durable memory (articles, pages, papers, books, files, recordings, meeting transcripts, verbatim ideas), or when repairing wrong memories after a correction. Routes material kinds, guides audience scope, and owns write/repair discipline.
 default_enabled: true
 ankole-runtime: main
 ---

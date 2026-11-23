@@ -74,4 +74,40 @@ defmodule Ankole.AIGateway.CodexModelsTest do
              "image"
            ]
   end
+
+  test "base_instructions uses Ankole's headless Job prompt without TUI or internal leaks" do
+    base = CodexModels.card("gpt-main", ["text"])["base_instructions"]
+
+    assert byte_size(base) < 4_500
+    assert base =~ "Background Agent Job"
+    assert base =~ "AGENTS.md"
+    assert base =~ "unified_exec"
+    assert base =~ "apply_patch"
+    assert base =~ "rg"
+    assert base =~ "update_plan"
+    assert base =~ "10000 tokens"
+
+    for removed <- [
+          "Preamble messages",
+          "Add dark mode toggle",
+          "README.md†",
+          "Do not `git commit`",
+          ~s({"command":["apply_patch")
+        ] do
+      refute base =~ removed
+    end
+
+    for leaked_term <- ~w(
+          Ecto
+          Rustler
+          Oban
+          Ankole.Repo
+          PostgreSQL
+          RuntimeFabric
+          AIGateway
+          SignalsGateway
+        ) do
+      refute Regex.match?(~r/\b#{Regex.escape(leaked_term)}\b/, base)
+    end
+  end
 end

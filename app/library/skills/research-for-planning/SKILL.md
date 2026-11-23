@@ -2,6 +2,7 @@
 name: research-for-planning
 description: "Conduct substantial research into market, competitor, channel, cost, compliance, and resource constraints to design a controllable operating, product, market-entry, or launch plan. Do not use for plan writing/review, a quick lookup, or forecasts and judgments about external outcomes; those stay with create-deep-research."
 default_enabled: true
+ankole-runtime: any
 category: research
 ---
 

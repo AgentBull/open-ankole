@@ -34,6 +34,50 @@ defmodule Ankole.Brain.SignalsLearning do
   @max_slice_entries 200
   @known_page_limit 20
   @known_page_alias_limit 5
+  @extraction_instructions """
+  You extract long-term memory from a chat transcript. Return one JSON
+  object: {"items": [...]}. Each item is one of:
+
+  - {"type":"fact","claim":"...","kind":"event|preference|commitment|belief|fact","holder":"<who holds it>","scope":"...","notability":"high|medium|low","confidence":0.75,"context":"...","object_slug":"<optional entity page>","valid_from":"<ISO8601, optional>","provenance":"<quote or paraphrase of the source line>"}
+  - {"type":"take","claim":"...","kind":"take|bet|hunch","holder":"<who holds it>","scope":"...","weight":0.55,"provenance":"..."}
+  - {"type":"object","slug":"<prefix/name>","object_type":"<installed type>","title":"...","aliases":["..."]}
+  - {"type":"timeline","object_slug":"...","date":"YYYY-MM-DD","summary":"...","scope":"..."}
+  - {"type":"link","from":"<slug>","to":"<slug>","link_type":"..."}
+
+  Filing rules:
+  1. holder is who HOLDS the judgment, not who it is about. "A says B is
+     unreliable" is a take held by A, not a fact about B.
+  2. One item carries exactly one independently changeable assertion;
+     split compound statements.
+  3. Relaying another person's judgment keeps their holder; the relayer's
+     own endorsement is a separate take with weight at most 0.55.
+  4. A fact self-reported by its subject caps confidence at 0.75; only
+     independent corroboration justifies more.
+  5. weight and confidence are multiples of 0.05.
+  6. Skip greetings, transient operational detail, and anything without
+     long-term value. Prefer writing nothing over writing noise.
+  7. The agent type and agents/ prefix identify this instance's system
+     Agent Principals. Their pages are created by the Principal lifecycle.
+     Reuse the supplied canonical Agent slugs for references and holders;
+     never create an agent object or invent an agents/ slug. Skills, model
+     names, tools, automations, and assistant personas are not Principals.
+     Use an appropriate writable type, or note when none fits. Attach
+     information to the page it describes, not to an Agent acting on it.
+
+  Scope: the source audience is an upper bound. Keep the default scope supplied
+  below unless the content has an explicit confidentiality signal (for example
+  "don't tell anyone"); in that case, use the narrower "principal:<uid>" of
+  one speaker. Do not use "world" for content learned from this conversation.
+  Any other scope value falls back to the default.
+
+  Holders are canonical page slugs of the speakers, "world" for common
+  knowledge, or an entity page slug.
+
+  When known pages are listed below, an entity in that list must reuse the
+  listed slug in every object_slug, link, and timeline reference; do not
+  create a new object item for it. Create a new object only for an entity
+  absent from the known-pages list and from the speaker list.
+  """
 
   @doc """
   Processes the pending slice of one channel. Returns a status map; slices
@@ -163,7 +207,11 @@ defmodule Ankole.Brain.SignalsLearning do
     else
       prompt = extraction_prompt(transcript, learning_context, known_pages(transcript.text))
 
-      case ModelCalls.complete_json(model, prompt, caller: "brain.signals_learning") do
+      case ModelCalls.complete_json(model, prompt,
+             caller: "brain.signals_learning",
+             instructions: String.trim(@extraction_instructions),
+             prompt_cache_key: "brain:signals_learning"
+           ) do
         {:ok, %{"items" => items}} when is_list(items) ->
           # The input version is recomputed over the same entries after the
           # model call: an in-slice edit or delete during the run writes no
@@ -618,11 +666,6 @@ defmodule Ankole.Brain.SignalsLearning do
     Known pages already in memory that this transcript mentions:
     #{lines}
 
-    An entity in this list must reuse the listed slug in every object_slug,
-    link, and timeline reference; do not create a new object item for it.
-    Create a new object only for an entity absent from this list and from
-    the speaker list.
-
     """
   end
 
@@ -643,44 +686,9 @@ defmodule Ankole.Brain.SignalsLearning do
       |> Enum.map_join(", ", fn type -> "#{type.name} (slug prefix #{type.slug_prefix})" end)
 
     """
-    You extract long-term memory from a chat transcript. Return one JSON
-    object: {"items": [...]}. Each item is one of:
+    Default scope: #{learning_context.default_scope}
 
-    - {"type":"fact","claim":"...","kind":"event|preference|commitment|belief|fact","holder":"<who holds it>","scope":"...","notability":"high|medium|low","confidence":0.75,"context":"...","object_slug":"<optional entity page>","valid_from":"<ISO8601, optional>","provenance":"<quote or paraphrase of the source line>"}
-    - {"type":"take","claim":"...","kind":"take|bet|hunch","holder":"<who holds it>","scope":"...","weight":0.55,"provenance":"..."}
-    - {"type":"object","slug":"<prefix/name>","object_type":"<installed type>","title":"...","aliases":["..."]}
-    - {"type":"timeline","object_slug":"...","date":"YYYY-MM-DD","summary":"...","scope":"..."}
-    - {"type":"link","from":"<slug>","to":"<slug>","link_type":"..."}
-
-    Filing rules:
-    1. holder is who HOLDS the judgment, not who it is about. "A says B is
-       unreliable" is a take held by A, not a fact about B.
-    2. One item carries exactly one independently changeable assertion;
-       split compound statements.
-    3. Relaying another person's judgment keeps their holder; the relayer's
-       own endorsement is a separate take with weight at most 0.55.
-    4. A fact self-reported by its subject caps confidence at 0.75; only
-       independent corroboration justifies more.
-    5. weight and confidence are multiples of 0.05.
-    6. Skip greetings, transient operational detail, and anything without
-       long-term value. Prefer writing nothing over writing noise.
-    7. The agent type and agents/ prefix identify this instance's system
-       Agent Principals. Their pages are created by the Principal lifecycle.
-       Reuse the supplied canonical Agent slugs for references and holders;
-       never create an agent object or invent an agents/ slug. Skills, model
-       names, tools, automations, and assistant personas are not Principals.
-       Use an appropriate writable type, or note when none fits. Attach
-       information to the page it describes, not to an Agent acting on it.
-
-    Scope: the source audience is an upper bound. The default scope is
-    #{learning_context.default_scope}. Keep that scope unless the content has
-    an explicit confidentiality signal (for example "don't tell anyone"); in
-    that case, use the narrower "principal:<uid>" of one speaker. Do not use
-    "world" for content learned from this conversation. Any other scope value
-    falls back to the default.
-
-    Holders are canonical page slugs of the speakers, "world" for common
-    knowledge, or an entity page slug. Speakers:
+    Speakers:
     #{speakers}
 
     #{known_pages_section(known_pages)}Installed object types (for new object items): #{installed_types}

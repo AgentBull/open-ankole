@@ -24,8 +24,12 @@ defmodule Ankole.Brain.SignalsLearningWritebackTest do
     %{principal: agent} = agent_fixture(%{owner_principal_uid: owner.uid})
     %{principal: alice} = human_fixture()
 
+    test_pid = self()
+
     base_url =
       start_upstream_server(fn %{path: "chat/completions", body: body} ->
+        send(test_pid, {:signals_extraction_request, body})
+
         items = %{
           "items" => [
             %{
@@ -106,6 +110,22 @@ defmodule Ankole.Brain.SignalsLearningWritebackTest do
     # The entity never resolved, so the claim parents on the channel; the
     # participant's context-pack card is what carries it back.
     assert claim.object_slug == nil
+
+    assert_receive {:signals_extraction_request, request}
+    assert request["prompt_cache_key"] == "brain:signals_learning"
+
+    assert [
+             %{"role" => "system", "content" => instructions},
+             %{"role" => "user", "content" => user_prompt}
+           ] = request["messages"]
+
+    assert instructions =~ "You extract long-term memory from a chat transcript."
+    assert instructions =~ "valid_from"
+    refute instructions =~ "send me something written first"
+    assert user_prompt =~ "Default scope:"
+    assert user_prompt =~ "Speakers:"
+    assert user_prompt =~ "Transcript:"
+    refute user_prompt =~ "You extract long-term memory from a chat transcript."
   end
 
   test "a group chat cannot promote learned memory to world", %{

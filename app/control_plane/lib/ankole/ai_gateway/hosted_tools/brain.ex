@@ -50,13 +50,14 @@ defmodule Ankole.AIGateway.HostedTools.Brain do
   defmodule Plan do
     @moduledoc false
 
-    defstruct subject_uid: nil, operations: [], inject?: false, context: nil
+    defstruct subject_uid: nil, operations: [], inject?: false, context: nil, route_allowed?: true
 
     @type t :: %__MODULE__{
             subject_uid: String.t(),
             operations: [String.t()],
             inject?: boolean(),
-            context: Ankole.Brain.Tools.Context.t()
+            context: Ankole.Brain.Tools.Context.t(),
+            route_allowed?: boolean()
           }
   end
 
@@ -96,13 +97,16 @@ defmodule Ankole.AIGateway.HostedTools.Brain do
         {:ok, nil, request}
 
       {[declaration], plain} ->
+        metadata = Map.get(request, "metadata")
+
         with {:ok, spec} <- validate_declaration(declaration),
-             {:ok, context} <- build_context(subject_uid, Map.get(request, "metadata")) do
+             {:ok, context} <- build_context(subject_uid, metadata) do
           plan = %Plan{
             subject_uid: subject_uid,
             operations: spec.operations,
             inject?: spec.inject?,
-            context: context
+            context: context,
+            route_allowed?: route_allowed?(metadata)
           }
 
           {:ok, plan, ToolSearch.put_tools(request, plain)}
@@ -298,9 +302,12 @@ defmodule Ankole.AIGateway.HostedTools.Brain do
   @spec inject_stateful(String.t(), map(), Conversation.t(), [map()]) :: {[map()], map()}
   def inject_stateful(subject_uid, request, %Conversation{} = conversation, current_input)
       when is_list(current_input) do
-    with {:ok, %{inject?: true}} <- declaration(request),
-         {:ok, context} <- build_context(subject_uid, Map.get(request, "metadata")) do
-      actor_event_id = BrainContext.actor_event_id(Map.get(request, "metadata"))
+    metadata = Map.get(request, "metadata")
+
+    with true <- route_allowed?(metadata),
+         {:ok, %{inject?: true}} <- declaration(request),
+         {:ok, context} <- build_context(subject_uid, metadata) do
+      actor_event_id = BrainContext.actor_event_id(metadata)
       recent_text = recent_user_text(current_input)
 
       pack_messages =
@@ -401,9 +408,35 @@ defmodule Ankole.AIGateway.HostedTools.Brain do
     end
   end
 
+  defp route_allowed?(metadata) when is_map(metadata) do
+    action =
+      Map.get(metadata, "ambient_route_action") || Map.get(metadata, :ambient_route_action)
+
+    authority =
+      Map.get(metadata, "ambient_route_authority") || Map.get(metadata, :ambient_route_authority)
+
+    not (action == "NEW_WORK" and authority == "NONE")
+  end
+
+  defp route_allowed?(_metadata), do: true
+
   defp root_call?(item), do: Map.get(item, "namespace") in [nil, "", "functions"]
 
   # Execution
+
+  defp job(%Plan{route_allowed?: false} = plan, call) do
+    %{
+      kind: :brain,
+      call_id: Map.get(call, "call_id"),
+      operation: Map.get(call, "name"),
+      context: plan.context,
+      preflight_outcome:
+        failed_outcome(
+          "brain_route_not_allowed",
+          "Brain operations are not allowed on an unauthorized NEW_WORK ambient turn"
+        )
+    }
+  end
 
   defp job(plan, call) do
     base = %{

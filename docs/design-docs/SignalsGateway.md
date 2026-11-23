@@ -438,9 +438,35 @@ that entry instead of the batch tail. A failed validation records a degraded
 attribution and the wake stays proactive.
 
 `FOREGROUND_REPLY` cannot create or respawn a Job. `NEW_WORK` without a direct
-request or matching standing order starts a confirmation-only Text Turn with
-no local or provider-hosted tools. An authorized `NEW_WORK` enters the normal
-owner Text Turn, which still applies the standard approval and Job policies.
+request or matching standing order starts a confirmation-only Text Turn. An
+authorized `NEW_WORK` enters the normal owner Text Turn, which still applies
+the standard approval and Job policies.
+
+To keep the system prompt and tool declarations cache-stable across main,
+ambient, and scheduled turns, `buildAgentSystemPrompt` omits per-turn
+`<ambient_route>` and scheduled-reply directives, and `runTextTurnLoop` sends
+the same local `tools` and `hostedTools` declarations on every turn.
+`buildTextTurnUserPrompt` places `<ambient_route>` and scheduled-reply
+instructions in the current turn's user message alongside
+`<agent_environment_info>`, and `textTurnStatefulContext` attaches
+`ambient_route_action` and `ambient_route_authority` in `stateful.metadata`.
+Runtime gates enforce the selected ambient route instead of mutating prompt
+prefixes:
+
+- Worker `beforeToolCall` blocks all local tools on `NEW_WORK` with `NONE` and
+  blocks non-read-only local tools (`tool.isReadOnly !== true`) on
+  `FOREGROUND_REPLY`, failing with `ambient_route_not_allowed` before tool
+  execution or `tool.activity` emission.
+- AIGateway `HostedTools.Brain` reads `ambient_route_action` and
+  `ambient_route_authority` from request `metadata`. `FOREGROUND_REPLY` keeps
+  memory injection and read/write Brain operations; `NEW_WORK` with `NONE`
+  skips `inject_stateful/4` and fails every Brain operation at preflight with
+  `brain_route_not_allowed` before `Ankole.Brain.Tools.execute/3` runs.
+- Provider-executed `web_search` and `image_generation` run inside the upstream
+  provider round and stay declared across turns for prefix caching; on a
+  `NEW_WORK` with `NONE` confirmation turn, withholding them is enforced only by
+  the `<ambient_route>` instruction in the user message rather than a runtime
+  tool gate.
 
 ### Channel Standing Orders
 
@@ -840,6 +866,8 @@ RuntimeFabric carries worker messages and checks their protocol.
 - One reply-preview generation can update only its presentation owner.
 - A removed source cannot commit a late Agent result while its tombstone is active.
 - A queued `may_intervene` event cannot run after its scene or binding policy changes.
+- Ambient route boundaries enforce local tool and Brain restrictions at runtime
+  while keeping system prompts and tool declarations cache-stable across turns.
 - An uncertain visible final reply can retry only inside its attempt budget and
   tells the recipient that the recovered reply can be a duplicate.
 - A conversation turn for an Agent at its token quota completes with a notice

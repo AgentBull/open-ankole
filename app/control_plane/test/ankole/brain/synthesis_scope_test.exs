@@ -124,7 +124,15 @@ defmodule Ankole.Brain.SynthesisScopeTest do
 
     assert {:ok, _page} = Synthesis.synthesize(agent.uid, "Acme renewal")
     assert_receive {:synthesis_request, request}
-    prompt = request["messages"] |> List.first() |> Map.fetch!("content")
+    assert request["prompt_cache_key"] == "brain:synthesis"
+
+    assert [
+             %{"role" => "system", "content" => instructions},
+             %{"role" => "user", "content" => prompt}
+           ] = request["messages"]
+
+    assert instructions =~ "Answer one question from organizational memory."
+    refute prompt =~ "Answer one question from organizational memory."
 
     for value <- [
           fact.id,

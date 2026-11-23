@@ -41,6 +41,24 @@ defmodule Ankole.Brain.Dreaming do
   @suggest_subtype_threshold 20
   @suggest_type_threshold 100
 
+  @timeline_extraction_instructions """
+  Extract dated events from one memory page passage. Only an event with an
+  explicit calendar date qualifies; do not infer dates. Return one JSON
+  object: {"items":[{"date":"YYYY-MM-DD","summary":"one line","detail":"optional expansion"}]}
+  Return {"items":[]} when the passage has none.
+  """
+
+  @contradiction_probe_instructions """
+  Compare two memory claims about one entity from one holder and decide
+  whether they contradict. Most pairs do not: use the verdict
+  "no_contradiction" for unrelated or compatible claims. Return one JSON
+  object:
+  {"verdict":"no_contradiction|contradiction|temporal_regression|temporal_supersession|evolution|negation_artifact",
+   "axis":"one-sentence axis of disagreement",
+   "severity":"info|low|medium|high",
+   "confidence":0.8}
+  """
+
   @high_emotion_tags MapSet.new(~w(
     family marriage wedding loss death grief relationship love mental-health
     health illness birth children kids parents
@@ -388,17 +406,16 @@ defmodule Ankole.Brain.Dreaming do
 
   defp extract_segment_timelines(model, object, segment) do
     prompt = """
-    Extract dated events from one memory page passage. Only an event with an
-    explicit calendar date qualifies; do not infer dates. Return one JSON
-    object: {"items":[{"date":"YYYY-MM-DD","summary":"one line","detail":"optional expansion"}]}
-    Return {"items":[]} when the passage has none.
-
     Page: #{object.title}
     Passage:
     #{segment.text}
     """
 
-    case ModelCalls.complete_json(model, prompt, caller: "brain.dreaming.timelines") do
+    case ModelCalls.complete_json(model, prompt,
+           caller: "brain.dreaming.timelines",
+           instructions: String.trim(@timeline_extraction_instructions),
+           prompt_cache_key: "brain:dreaming:timelines"
+         ) do
       {:ok, output} ->
         written =
           output["items"]
@@ -584,15 +601,6 @@ defmodule Ankole.Brain.Dreaming do
 
   defp probe_pair(model, {a, b}) do
     prompt = """
-    Compare two memory claims about one entity from one holder and decide
-    whether they contradict. Most pairs do not: use the verdict
-    "no_contradiction" for unrelated or compatible claims. Return one JSON
-    object:
-    {"verdict":"no_contradiction|contradiction|temporal_regression|temporal_supersession|evolution|negation_artifact",
-     "axis":"one-sentence axis of disagreement",
-     "severity":"info|low|medium|high",
-     "confidence":0.8}
-
     Claim A (#{a.kind}, valid from #{a.valid_from}, until #{a.valid_until}): #{a.claim}
     Context A: #{a.context}
     Provenance A: #{a.provenance}
@@ -602,7 +610,11 @@ defmodule Ankole.Brain.Dreaming do
     """
 
     with {:ok, output} <-
-           ModelCalls.complete_json(model, prompt, caller: "brain.dreaming.contradictions"),
+           ModelCalls.complete_json(model, prompt,
+             caller: "brain.dreaming.contradictions",
+             instructions: String.trim(@contradiction_probe_instructions),
+             prompt_cache_key: "brain:dreaming:contradictions"
+           ),
          verdict when verdict in @contradiction_verdicts <- output["verdict"],
          confidence when is_number(confidence) <- output["confidence"] do
       record_contradiction_verdict(a.id, b.id, verdict, confidence, output)

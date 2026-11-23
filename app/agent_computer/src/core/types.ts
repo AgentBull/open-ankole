@@ -27,6 +27,7 @@ import type {
   UserMessage
 } from './llm'
 import type { WorkerTurnTrace } from '../observability/turn-tracing'
+import type { AmbientTextTurnRoute } from '../prompts/ambient_prompt'
 
 // Re-export the core LLM types so consumers can import from one place.
 export type {
@@ -81,6 +82,9 @@ export interface AgentLoopConfig {
 
   /** AIGateway-hosted tools declared by the control plane for this turn. */
   hostedTools?: HostedTool[]
+
+  /** Optional host-committed ambient route enforced against local tool calls. */
+  ambientRoute?: AmbientTextTurnRoute
 
   /** Reports each hosted Brain operation AIGateway ran inside a response. */
   onHostedBrainItem?: (event: HostedBrainItemEvent) => void

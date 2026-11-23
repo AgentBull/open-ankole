@@ -24,6 +24,12 @@ defmodule Ankole.Brain.Calibration do
   @grade_stale_months 6
   @calibration_start "<!-- brain:calibration:start -->"
   @calibration_end "<!-- brain:calibration:end -->"
+  @grade_instructions """
+  Grade one prediction against the available evidence. Return one JSON
+  object:
+  {"quality":"correct|incorrect|partial|unresolvable","confidence":0.8,
+   "domains":["<zero or more matching calibration domains>"]}
+  """
 
   @doc false
   def grade_takes do
@@ -88,11 +94,6 @@ defmodule Ankole.Brain.Calibration do
       end
 
     prompt = """
-    Grade one prediction against the available evidence. Return one JSON
-    object:
-    {"quality":"correct|incorrect|partial|unresolvable","confidence":0.8,
-     "domains":["<zero or more matching calibration domains>"]}
-
     Installed calibration domains: #{domain_line}
 
     Prediction (held by #{take.holder}, weight #{take.weight}): #{take.claim}
@@ -105,7 +106,11 @@ defmodule Ankole.Brain.Calibration do
     """
 
     with {:ok, output} <-
-           ModelCalls.complete_json(model, prompt, caller: "brain.dreaming.calibration"),
+           ModelCalls.complete_json(model, prompt,
+             caller: "brain.dreaming.calibration",
+             instructions: String.trim(@grade_instructions),
+             prompt_cache_key: "brain:dreaming:calibration"
+           ),
          quality when quality in ["correct", "incorrect", "partial", "unresolvable"] <-
            output["quality"],
          confidence when is_number(confidence) <- output["confidence"] do

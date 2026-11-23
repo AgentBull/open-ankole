@@ -2,6 +2,7 @@
 name: lark-im
 description: "Operate Lark as this digital employee's application bot: messages and chats, contacts, calendars, video meetings, in-meeting bot actions, and Minutes. Use for Lark cloud communication work; never for local document files."
 default_enabled: true
+ankole-runtime: any
 category: productivity
 tags: [lark, im, contact, calendar, vc, minutes]
 metadata:

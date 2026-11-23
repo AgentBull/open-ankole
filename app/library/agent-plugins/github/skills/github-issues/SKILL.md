@@ -2,6 +2,7 @@
 name: github-issues
 description: "Inspect, create, triage, and update GitHub issues with GitHub CLI."
 default_enabled: false
+ankole-runtime: any
 category: github
 tags: [GitHub, Issues, Project-Management, Bug-Tracking, Triage]
 version: 1.2.1

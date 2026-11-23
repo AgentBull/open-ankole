@@ -7,15 +7,16 @@ defmodule Ankole.AIGateway.CodexModels do
   semantics (`construct_model_info_from_candidates`, codex
   rust-v0.158.0). Every card therefore supplies the complete pinned card shape.
   AIGateway owns selector-specific modalities, the native search gate, and one
-  model-visible tool-output limit. Base instructions contain the prompt vendored
-  from the same codex pin and the readable form of that output limit. Cards keep
-  Responses Lite disabled because the pinned Codex runtime omits configured
-  hosted web search from that private carrier; standard Responses preserves the
-  native tool.
+  model-visible tool-output limit. Base instructions load Ankole's headless
+  Background Agent Job prompt from `priv/codex/base_instructions.md` plus the
+  readable form of that output limit. Cards keep Responses Lite disabled because
+  the pinned Codex runtime omits configured hosted web search from that private
+  carrier; standard Responses preserves the native tool.
 
-  Cards must stay in lockstep with the pinned codex version. Re-vendor
-  `priv/codex/base_instructions.md` and re-check the card baseline when the
-  codex pin changes.
+  Cards must stay in lockstep with the pinned codex version. Re-check the card
+  baseline when the codex pin changes, but keep `priv/codex/base_instructions.md`
+  as Ankole's headless Job prompt — do not overwrite it with the upstream
+  interactive CLI TUI prompt.
   """
 
   alias Ankole.AIAgent.ModelProfiles
